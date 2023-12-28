@@ -15,7 +15,7 @@ bevy burn async compute nodes. write compute shaders in burn with wgpu input and
 ## usage
 
 ```rust
-use bevy_burn::prelude::*;
+use bevy::prelude::*;
 use bevy_burn::{
     BurnInference,
     BurnModel,
@@ -51,5 +51,4 @@ fn burn_inference(
         commands.entity(entity).insert(output);
     }
 }
-
 ```
