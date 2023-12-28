@@ -31,6 +31,7 @@ exclude = [
 
 
 [dependencies]
+burn = { version = "0.11.1", features = ["wgpu"] }
 bytemuck = "1.14"
 wgpu = "0.17.1"
 

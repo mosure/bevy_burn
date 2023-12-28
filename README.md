@@ -27,28 +27,38 @@ fn main() {
     App::build()
         .add_plugins(DefaultPlugins)
         .add_plugin(BurnPlugin)
-        .add_system(burn_inference)
+        .add_system(Startup, setup)
+        .add_system(Update, burn_inference)
         .run();
+}
+
+fn setup(
+    mut commands: Commands,
+    burn_models: Res<Assets<BurnModel>>,
+) {
+    let model = burn_models.load("model.onnx");
+    let input = SomeInput::default();
+
+    commands.spawn().insert(input).insert(model);
 }
 
 fn burn_inference(
     mut commands: Commands,
     burn_inference: Res<BurnInference>,
+    burn_models: Res<Assets<BurnModel>>,
     input_data: Query<(
         Entity,
         &SomeInput,
+        &Handle<BurnModel>,
         Without<BurnOutput>,
     )>,
-    mut model: Local<BurnModel>,
 ) {
-    if model.is_none() {
-        *model = burn_inference.model("model.onnx").unwrap();
-    }
+    for (entity, model_handle, input, _) in input_data.iter() {
+        if let Some(model) = burn_models.get(model_handle) {
+            let output = model.inference(input).unwrap();
 
-    for (entity, input) in input_data.iter() {
-        let output = model.inference(input).unwrap();
-
-        commands.entity(entity).insert(output);
+            commands.entity(entity).insert(output);
+        }
     }
 }
 ```
