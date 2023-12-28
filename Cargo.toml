@@ -1,0 +1,86 @@
+[package]
+name = "bevy_burn"
+description = "bevy burn wgpu compute nodes"
+version = "0.1.0"
+edition = "2021"
+authors = ["mosure <mitchell@mosure.me>"]
+license = "MIT"
+keywords = [
+  "bevy",
+  "burn",
+  "machine-learning",
+  "compute-shader",
+]
+categories = [
+  "computer-vision",
+  "graphics",
+  "rendering",
+]
+homepage = "https://github.com/mosure/bevy_burn"
+repository = "https://github.com/mosure/bevy_burn"
+readme = "README.md"
+exclude = [
+  ".devcontainer",
+  ".github",
+  "docs",
+  "dist",
+  "build",
+  "assets",
+  "credits",
+]
+
+
+[dependencies]
+bytemuck = "1.14"
+wgpu = "0.17.1"
+
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
+wasm-bindgen = "0.2"
+
+
+# TODO: use minimal bevy features
+[dependencies.bevy]
+version = "0.12"
+default-features = false
+features = [
+  "bevy_asset",
+  "bevy_core_pipeline",
+  "bevy_render",
+  "bevy_winit",
+]
+
+
+[dependencies.web-sys]
+version = "0.3.4"
+features = [
+  'Document',
+  'Element',
+  'HtmlElement',
+  'Location',
+  'Node',
+  'Window',
+]
+
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
