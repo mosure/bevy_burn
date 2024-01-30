@@ -36,16 +36,20 @@ bytemuck = "1.14"
 wgpu = "0.17.1"
 
 
+[build-dependencies]
+burn-import = "0.11.1"
+
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
 wasm-bindgen = "0.2"
 
 
-# TODO: use minimal bevy features
 [dependencies.bevy]
 version = "0.12"
 default-features = false
 features = [
+  "asset_processor",
   "bevy_asset",
   "bevy_core_pipeline",
   "bevy_render",
