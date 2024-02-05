@@ -37,7 +37,7 @@ wgpu = "0.17.1"
 
 
 [build-dependencies]
-burn-import = "0.11.1"
+burn-import = "0.12.1"
 
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
