@@ -19,8 +19,8 @@ use burn_core::{
         backend::Backend,
         ElementConversion,
         Int,
-        // module::conv2d,
-        // ops::ConvOptions,
+        module::conv2d,
+        ops::ConvOptions,
         Tensor,
     },
 };
@@ -33,15 +33,15 @@ type BurnBackend = Autodiff<Wgpu<f32, i32>>;
 // TODO: convert to resource and add world inspector
 const CFL: f32 = 0.3;
 const MAX_DT: f32 = 0.01;
-const MAX_STEPS: usize = 2;
+const MAX_STEPS: usize = 1;
 const MAX_VEL: f32 = 1000.0;
-const PRESSURE_ITERS: usize = 30;
+const PRESSURE_ITERS: usize = 10;
 const SIZE: u32 = 512;
 const SOURCE_MAG: f32 = 0.05;
 const SOURCE_POS: (usize, usize) = (SIZE as usize / 2, SIZE as usize / 2);
 const SOURCE_SIGMA: f32 = 3.0;
 const VISCOSITY: f32 = 1e-3;
-const DIFF_ITERS: usize = 10;
+const DIFF_ITERS: usize = 4;
 const OMEGA: f32 = 1.7;
 
 
@@ -150,7 +150,7 @@ fn navier_stokes<B: Backend>(
     let mut p = Tensor::<B, 4>::zeros(div.dims(), &Default::default());
     let rhs = div.clone() / dt;
 
-    // TODO: move to static allocation
+
     let [_, _, h, w] = p.dims();
     let mask_red = colour_mask::<B>(h, w,  true ).repeat(&[1,1,1,1]);
     let mask_black = colour_mask::<B>(h, w, false).repeat(&[1,1,1,1]);
@@ -167,6 +167,8 @@ fn navier_stokes<B: Backend>(
         let p_new  = (sum_nb - rhs.clone()) * 0.25;
         p = p.clone() + (p_new - p) * mask_black.clone() * OMEGA;
     }
+
+
     let (dp_dx, dp_dy) = grad_p(&p);
     let u_corr = u - dp_dx * dt;
     let w_corr = wv - dp_dy * dt;
