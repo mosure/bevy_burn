@@ -7,46 +7,48 @@ use bevy::{
         DiagnosticsStore,
         FrameTimeDiagnosticsPlugin,
     },
+    render::texture::ImagePlugin,
 };
 use bevy_burn::{
     BevyBurnBridgePlugin,
     BevyBurnHandle,
     BindingDirection,
+    TransferKind,
 };
-use burn_autodiff::Autodiff;
 use burn_core::{
     tensor::{
         backend::Backend,
         ElementConversion,
         Int,
-        module::conv2d,
-        ops::ConvOptions,
         Tensor,
     },
 };
 use burn_wgpu::Wgpu;
 
 
-type BurnBackend = Autodiff<Wgpu<f32, i32>>;
+type BurnBackend = Wgpu<f32, i32>;
 
 
 // TODO: convert to resource and add world inspector
 const CFL: f32 = 0.3;
 const MAX_DT: f32 = 0.01;
-const MAX_STEPS: usize = 1;
+const MAX_STEPS: usize = 256;
 const MAX_VEL: f32 = 1000.0;
-const PRESSURE_ITERS: usize = 10;
-const SIZE: u32 = 512;
-const SOURCE_MAG: f32 = 0.05;
+const PRESSURE_ITERS: usize = 8;
+const SIZE: u32 = 1024;
+const SOURCE_MAG: f32 = 10.5;
 const SOURCE_POS: (usize, usize) = (SIZE as usize / 2, SIZE as usize / 2);
 const SOURCE_SIGMA: f32 = 3.0;
 const VISCOSITY: f32 = 1e-3;
-const DIFF_ITERS: usize = 4;
-const OMEGA: f32 = 1.7;
+const DIFF_ITERS: usize = 2;
+const OMEGA: f32 = 1.6;
+const PRESSURE_RES_TOL: f32 = 1e-3;
+const VIZ_TAU_RISE: f32 = 0.15;
+const VIZ_TAU_FALL: f32 = 0.60;
 
 
 
-fn velocity_to_rgba<B: Backend>(v: &Tensor<B, 4>) -> Tensor<B, 3> {
+fn velocity_to_rgba<B: Backend>(v: &Tensor<B, 4>, scale: f32) -> Tensor<B, 3> {
     let vx = v.clone()
         .slice_dim(0, 0..1)
         .slice_dim(1, 0..1)
@@ -58,12 +60,20 @@ fn velocity_to_rgba<B: Backend>(v: &Tensor<B, 4>) -> Tensor<B, 3> {
         .squeeze_dims::<2>(&[0, 1]);
 
     let mag = (vx.powf_scalar(2.) + vy.powf_scalar(2.)).sqrt();
-    let max_val = mag.clone().max().add_scalar(1e-8f32).into_scalar();
-    let mag = mag.div_scalar(max_val);
+    let x = mag.div_scalar(scale.max(1e-8)).clamp(0.0, 1.0);
 
-    let r = mag.clone().unsqueeze_dim::<3>(2);
-    let g = mag.clone().unsqueeze_dim::<3>(2);
-    let b = mag.unsqueeze_dim::<3>(2);
+    // Simple Jet colormap approximation
+    // r = clamp(1.5 - |4x - 3|, 0, 1)
+    // g = clamp(1.5 - |4x - 2|, 0, 1)
+    // b = clamp(1.5 - |4x - 1|, 0, 1)
+    let four_x = x.clone().mul_scalar(4.0);
+    let r = (four_x.clone().sub_scalar(3.0)).abs().mul_scalar(-1.0).add_scalar(1.5).clamp(0.0, 1.0);
+    let g = (four_x.clone().sub_scalar(2.0)).abs().mul_scalar(-1.0).add_scalar(1.5).clamp(0.0, 1.0);
+    let b = (four_x.sub_scalar(1.0)).abs().mul_scalar(-1.0).add_scalar(1.5).clamp(0.0, 1.0);
+
+    let r = r.unsqueeze_dim::<3>(2);
+    let g = g.unsqueeze_dim::<3>(2);
+    let b = b.unsqueeze_dim::<3>(2);
     let a = Tensor::<B, 3>::ones(r.dims(), &Default::default());
 
     Tensor::cat(vec![r, g, b, a], 2)
@@ -127,20 +137,18 @@ fn navier_stokes<B: Backend>(
     v: Tensor<B, 4>,
     nu: f32,
     dt: f32,
+    xs: &Tensor<B, 4>,
+    ys: &Tensor<B, 4>,
+    mask_red: &Tensor<B, 4>,
+    mask_black: &Tensor<B, 4>,
 ) -> Tensor<B, 4> {
     if dt <= 0.0 {
         return v;
     }
 
-    info!(
-        "field min: {}, max: {}",
-        v.clone().min().into_scalar(),
-        v.clone().max().into_scalar(),
-    );
-
     let v = v.clamp(-MAX_VEL, MAX_VEL);
 
-    let v1 = advect::<B>(v, dt);
+    let v1 = advect::<B>(v, dt, xs, ys);
     let v2 = diffuse::<B>(v1, nu, dt);
 
     let u = v2.clone().slice_dim(1, 0..1);
@@ -150,24 +158,24 @@ fn navier_stokes<B: Backend>(
     let mut p = Tensor::<B, 4>::zeros(div.dims(), &Default::default());
     let rhs = div.clone() / dt;
 
-
-    let [_, _, h, w] = p.dims();
-    let mask_red = colour_mask::<B>(h, w,  true ).repeat(&[1,1,1,1]);
-    let mask_black = colour_mask::<B>(h, w, false).repeat(&[1,1,1,1]);
-
-    for _ in 0..PRESSURE_ITERS {
-        // let neigh = neigh_sum(&p);
-        // p = (neigh + rhs.clone()) * 0.25;
-
-        let sum_nb = neighbor_sum_rb(&p, true);
+    let scaled = ((PRESSURE_ITERS as f32) * (dt / MAX_DT).clamp(0.5, 1.0)).ceil() as usize;
+    let iters = scaled.max(2).min(PRESSURE_ITERS);
+    let tol = PRESSURE_RES_TOL;
+    for _ in 0..iters {
+        let sum_nb = neigh_sum(&p) * mask_red.clone();
         let p_new  = (sum_nb - rhs.clone()) * 0.25;
         p = p.clone() + (p_new - p) * mask_red.clone() * OMEGA;
 
-        let sum_nb = neighbor_sum_rb(&p, false);
+        let sum_nb = neigh_sum(&p) * mask_black.clone();
         let p_new  = (sum_nb - rhs.clone()) * 0.25;
         p = p.clone() + (p_new - p) * mask_black.clone() * OMEGA;
-    }
 
+        // residual r = Laplace(p) - rhs = (sum_nb - 4p) - rhs
+        let lap = neigh_sum(&p) - p.clone() * 4.0;
+        let r = lap - rhs.clone();
+        let r_max = r.abs().max().into_scalar().elem::<f32>();
+        if r_max <= tol { break; }
+    }
 
     let (dp_dx, dp_dy) = grad_p(&p);
     let u_corr = u - dp_dx * dt;
@@ -176,26 +184,26 @@ fn navier_stokes<B: Backend>(
 }
 
 
-fn d_dx<B: Backend>(f: &Tensor<B,4>) -> Tensor<B,4> {
-    (
-        f.clone().roll(&[ 1], &[3]) -
-        f.clone().roll(&[-1], &[3])
-    ) * 0.5
+// first‑order finite differences forming an adjoint pair
+fn dx_fwd<B: Backend>(f: &Tensor<B,4>) -> Tensor<B,4> {  // f(i+1) - f(i)
+    f.clone().roll(&[-1], &[3]) - f.clone()
 }
-
-fn d_dy<B: Backend>(f: &Tensor<B,4>) -> Tensor<B,4> {
-    (
-        f.clone().roll(&[ 1], &[2]) -
-        f.clone().roll(&[-1], &[2])
-    ) * 0.5
+fn dy_fwd<B: Backend>(f: &Tensor<B,4>) -> Tensor<B,4> {  // f(j+1) - f(j)
+    f.clone().roll(&[-1], &[2]) - f.clone()
+}
+fn dx_bwd<B: Backend>(f: &Tensor<B,4>) -> Tensor<B,4> {  // f(i) - f(i-1)
+    f.clone() - f.clone().roll(&[1], &[3])
+}
+fn dy_bwd<B: Backend>(f: &Tensor<B,4>) -> Tensor<B,4> {  // f(j) - f(j-1)
+    f.clone() - f.clone().roll(&[1], &[2])
 }
 
 fn divergence<B: Backend>(u: &Tensor<B,4>, v: &Tensor<B,4>) -> Tensor<B,4> {
-    d_dx(u) + d_dy(v)
+    dx_bwd(u) + dy_bwd(v)
 }
 
 fn grad_p<B: Backend>(p: &Tensor<B,4>) -> (Tensor<B,4>, Tensor<B,4>) {
-    (d_dx(p), d_dy(p))
+    (dx_fwd(p), dy_fwd(p))
 }
 
 fn neigh_sum<B: Backend>(v: &Tensor<B, 4>) -> Tensor<B, 4> {
@@ -228,42 +236,93 @@ fn neighbor_sum_rb<B: Backend>(v: &Tensor<B, 4>, red: bool) -> Tensor<B, 4> {
 }
 
 
-fn advect<B: Backend>(v: Tensor<B,4>, dt: f32) -> Tensor<B,4> {
-    /* first pass: semi‑lagrangian (existing bilinear) */
-    let v1 = advect_linear::<B>(v.clone(), dt);
-
-    /* second pass: forward step to estimate error */
-    let v_back = advect_linear::<B>(v1.clone(), -dt);
-
-    /* error estimate and correction */
-    let v2 = v1 + (v - v_back) * 0.5;
-
-    /* one last clamp to avoid new overshoots */
-    v2.clamp(-MAX_VEL, MAX_VEL)
-}
-
-
-fn advect_linear<B: Backend>(v: Tensor<B, 4>, dt: f32) -> Tensor<B, 4> {
+fn advect<B: Backend>(v: Tensor<B,4>, dt: f32, xs: &Tensor<B,4>, ys: &Tensor<B,4>) -> Tensor<B,4> {
+    // Bilinear semi-lagrangian step with donor tracking
     let [_, _, h, w] = v.dims();
-
-    let xs = Tensor::<B, 1, Int>::arange(0..w as i64, &Default::default())
-        .float().reshape([1, 1, 1, w]);
-    let ys = Tensor::<B, 1, Int>::arange(0..h as i64, &Default::default())
-        .float().reshape([1, 1, h, 1]);
 
     let u = v.clone().slice_dim(1, 0..1);
     let wv = v.clone().slice_dim(1, 1..2);
 
-    let x_back = xs - u * dt;
-    let y_back = ys - wv * dt;
+    let x_back = xs.clone() - u * dt;
+    let y_back = ys.clone() - wv * dt;
 
-    let x_back = (x_back + w as f32).remainder_scalar(w as f32);
-    let y_back = (y_back + h as f32).remainder_scalar(h as f32);
+    // periodic wrap into [0, size)
+    let x_back = x_back.clone() - (x_back.clone().div_scalar(w as f32)).floor().mul_scalar(w as f32);
+    let y_back = y_back.clone() - (y_back.clone().div_scalar(h as f32)).floor().mul_scalar(h as f32);
 
     let x0 = x_back.clone().floor();
     let y0 = y_back.clone().floor();
-    let x1 = (x0.clone() + 1.0).remainder_scalar(w as f32);
-    let y1 = (y0.clone() + 1.0).remainder_scalar(h as f32);
+    let x1 = (x0.clone() + 1.0) - ((x0.clone() + 1.0).div_scalar(w as f32)).floor().mul_scalar(w as f32);
+    let y1 = (y0.clone() + 1.0) - ((y0.clone() + 1.0).div_scalar(h as f32)).floor().mul_scalar(h as f32);
+
+    let wx = x_back - x0.clone();
+    let wy = y_back - y0.clone();
+
+    let gather = |
+        xx: Tensor<B,4>,
+        yy: Tensor<B,4>,
+    | {
+        let mut xi = xx.int();
+        let mut yi = yy.int();
+        let v = v.clone();
+        let c = v.dims()[1];
+        xi = xi.repeat(&[1, c, 1, 1]);
+        yi = yi.repeat(&[1, c, 1, 1]);
+        v.gather(3, xi).gather(2, yi)
+    };
+
+    let v00 = gather(x0.clone(), y0.clone());
+    let v10 = gather(x1.clone(), y0);
+    let v01 = gather(x0, y1.clone());
+    let v11 = gather(x1, y1);
+
+    let wxr = wx.repeat(&[1, v.dims()[1], 1, 1]);
+    let wyr = wy.repeat(&[1, v.dims()[1], 1, 1]);
+    let v0 = v00.clone() * (1.0 - wxr.clone()) + v10.clone() * wxr.clone();
+    let v1x = v01.clone() * (1.0 - wxr.clone()) + v11.clone() * wxr;
+    let v1: Tensor<B, 4> = v0 * (1.0 - wyr.clone()) + v1x * wyr;
+
+    // Forward step to estimate error (BFECC)
+    let v_back = advect_linear::<B>(v1.clone(), -dt, xs, ys);
+    let mut v2 = v1 + (v - v_back) * 0.5;
+
+    // Monotonic limiter: clamp to donor min/max to avoid creating new extrema
+    let smin = tmin(tmin(v00.clone(), v10.clone()), tmin(v01.clone(), v11.clone()));
+    let smax = tmax(tmax(v00, v10), tmax(v01, v11));
+    v2 = tmax(tmin(v2, smax.clone()), smin);
+
+    // Final safety clamp
+    v2.clamp(-MAX_VEL, MAX_VEL)
+}
+
+fn tmin<B: Backend>(a: Tensor<B,4>, b: Tensor<B,4>) -> Tensor<B,4> {
+    let diff = a.clone() - b.clone();
+    (a + b - diff.abs()) * 0.5
+}
+
+fn tmax<B: Backend>(a: Tensor<B,4>, b: Tensor<B,4>) -> Tensor<B,4> {
+    let diff = a.clone() - b.clone();
+    (a + b + diff.abs()) * 0.5
+}
+
+fn advect_linear<B: Backend>(v: Tensor<B, 4>, dt: f32, xs: &Tensor<B,4>, ys: &Tensor<B,4>) -> Tensor<B, 4> {
+    let [_, _, h, w] = v.dims();
+
+    let u = v.clone().slice_dim(1, 0..1);
+    let wv = v.clone().slice_dim(1, 1..2);
+
+    let x_back = xs.clone() - u * dt;
+    let y_back = ys.clone() - wv * dt;
+
+    // periodic wrap into [0, size) using floor-based modulo.
+    // using `remainder_scalar` biases samples toward the left/top edges.
+    let x_back = x_back.clone() - (x_back.clone().div_scalar(w as f32)).floor().mul_scalar(w as f32);
+    let y_back = y_back.clone() - (y_back.clone().div_scalar(h as f32)).floor().mul_scalar(h as f32);
+
+    let x0 = x_back.clone().floor();
+    let y0 = y_back.clone().floor();
+    let x1 = (x0.clone() + 1.0) - ((x0.clone() + 1.0).div_scalar(w as f32)).floor().mul_scalar(w as f32);
+    let y1 = (y0.clone() + 1.0) - ((y0.clone() + 1.0).div_scalar(h as f32)).floor().mul_scalar(h as f32);
 
     let wx = x_back - x0.clone();
     let wy = y_back - y0.clone();
@@ -308,20 +367,32 @@ fn advect_linear<B: Backend>(v: Tensor<B, 4>, dt: f32) -> Tensor<B, 4> {
 #[derive(Resource)]
 struct NavierStokesState<B: Backend> {
     velocity: Tensor::<B, 4>,
+    xs: Tensor::<B, 4>,
+    ys: Tensor::<B, 4>,
+    mask_red: Tensor::<B, 4>,
+    mask_black: Tensor::<B, 4>,
+    viz_scale: f32,
+    time_accum: f32,
 }
 
 impl Default for NavierStokesState<BurnBackend> {
     fn default() -> Self {
-        let velocity = Tensor::<BurnBackend, 4>::random(
+        let velocity = Tensor::<BurnBackend, 4>::zeros(
             [1, 2, SIZE as usize, SIZE as usize],
-            burn::tensor::Distribution::Uniform(-1.0, 1.0),
             &Default::default(),
         );
-        // let velocity = Tensor::<BurnBackend, 4>::zeros(
-        //     [1, 2, SIZE as usize, SIZE as usize],
-        //     &Default::default(),
-        // );
-        NavierStokesState { velocity }
+
+        let xs = Tensor::<BurnBackend, 1, Int>::arange(0..SIZE as i64, &Default::default())
+            .float()
+            .reshape([1, 1, 1, SIZE as usize]);
+        let ys = Tensor::<BurnBackend, 1, Int>::arange(0..SIZE as i64, &Default::default())
+            .float()
+            .reshape([1, 1, SIZE as usize, 1]);
+
+        let mask_red = colour_mask::<BurnBackend>(SIZE as usize, SIZE as usize, true).repeat(&[1,1,1,1]);
+        let mask_black = colour_mask::<BurnBackend>(SIZE as usize, SIZE as usize, false).repeat(&[1,1,1,1]);
+
+        NavierStokesState { velocity, xs, ys, mask_red, mask_black, viz_scale: 1.0, time_accum: 0.0 }
     }
 }
 
@@ -331,8 +402,13 @@ fn setup<B: Backend>(
     mut images: ResMut<Assets<Image>>,
     mut ns: ResMut<NavierStokesState<B>>,
 ) {
-    // ns.velocity = ns.velocity.clone() + velocity_point_source::<B>(&ns.velocity);
-    let rgba = velocity_to_rgba(&ns.velocity);
+    ns.velocity = ns.velocity.clone() + velocity_point_source::<B>(&ns.velocity);
+    // initialize viz scale based on current field
+    let u0 = ns.velocity.clone().slice_dim(1, 0..1);
+    let v0 = ns.velocity.clone().slice_dim(1, 1..2);
+    let mag_max0 = (u0.clone().powf_scalar(2.) + v0.clone().powf_scalar(2.)).sqrt().max().into_scalar().elem::<f32>();
+    ns.viz_scale = mag_max0.max(1e-3);
+    let rgba = velocity_to_rgba(&ns.velocity, ns.viz_scale);
 
     let bevy_image = images.add(Image::default());
     commands.spawn(BevyBurnHandle {
@@ -340,6 +416,7 @@ fn setup<B: Backend>(
         tensor: rgba,
         upload: true,
         direction: BindingDirection::BurnToBevy,
+        xfer: TransferKind::Cpu,
     });
 
 
@@ -361,21 +438,79 @@ fn update_tensor<B: Backend>(
     mut ns: ResMut<NavierStokesState<B>>,
 ) {
     for mut handle in handles.iter_mut() {
-        let frame_dt  = time.delta_secs();
-        let vmax = ns.velocity.clone().abs().max().into_scalar().elem::<f32>().max(1e-3);
-        let safe_dt = (CFL / vmax).min(MAX_DT);
+        // ns.velocity = ns.velocity.clone() + velocity_point_source::<B>(&ns.velocity);
 
-        let steps = ((frame_dt / safe_dt).ceil() as usize).clamp(1, MAX_STEPS);
-        let sub_dt = frame_dt / steps as f32;
+                let frame_dt  = time.delta_secs();
 
-        // ns.velocity = ns.velocity.clone() + velocity_point_source::<B>(&ns.velocity) * frame_dt;
-        // ns.velocity = ns.velocity.clone() + vortex_source::<B>(&ns.velocity) * frame_dt;
+                // Accumulate time and step the simulation with a fixed dt, respecting CFL.
+                ns.time_accum = (ns.time_accum + frame_dt).min(0.25);
+                let mut substeps: usize = 0;
 
-        for _ in 0..steps {
-            ns.velocity = navier_stokes(ns.velocity.clone(), VISCOSITY, sub_dt);
-        }
 
-        let rgba = velocity_to_rgba(&ns.velocity);
+                // local knobs to avoid excessive substeps and reduce CFL recomputes
+                let fixed_dt: f32 = 1.0 / 240.0;
+                let max_substeps_per_frame: usize = 8;
+                let cfl_recomp_interval: usize = 4;
+
+                // Compute CFL once, then throttle recomputation to reduce overhead.
+                let uu = ns.velocity.clone().slice_dim(1, 0..1);
+                let vv = ns.velocity.clone().slice_dim(1, 1..2);
+                let mut vmax = (uu.clone().powf_scalar(2.) + vv.clone().powf_scalar(2.)).sqrt().max().into_scalar().elem::<f32>().max(1e-3);
+
+                let mut safe_dt = (CFL / vmax).min(MAX_DT);
+
+                let mut dt = fixed_dt.min(safe_dt).max(1e-6);
+
+                while ns.time_accum >= dt && substeps < max_substeps_per_frame {
+                    ns.velocity = navier_stokes(
+
+                        ns.velocity.clone(),
+
+                        VISCOSITY,
+
+                        dt,
+
+                        &ns.xs,
+
+                        &ns.ys,
+
+                        &ns.mask_red,
+
+                        &ns.mask_black,
+
+                    );
+
+
+                    ns.time_accum -= dt;
+                    substeps += 1;
+
+
+                    if substeps % cfl_recomp_interval == 0 {
+                        let u2 = ns.velocity.clone().slice_dim(1, 0..1);
+                        let v2 = ns.velocity.clone().slice_dim(1, 1..2);
+                        vmax = (u2.clone().powf_scalar(2.) + v2.clone().powf_scalar(2.)).sqrt().max().into_scalar().elem::<f32>().max(1e-3);
+                        safe_dt = (CFL / vmax).min(MAX_DT);
+                        dt = fixed_dt.min(safe_dt).max(1e-6);
+                    }
+                }
+
+
+        // smooth the visualization scale to reduce flicker (rate-limited EMA)
+        let u = ns.velocity.clone().slice_dim(1, 0..1);
+        let v = ns.velocity.clone().slice_dim(1, 1..2);
+        let mag_max = (u.clone().powf_scalar(2.) + v.clone().powf_scalar(2.)).sqrt().max().into_scalar().elem::<f32>();
+
+        let eps = 1e-3f32;
+        let current = ns.viz_scale.max(eps);
+        let target = mag_max.max(eps);
+        let alpha_up = 1.0 - (-frame_dt / VIZ_TAU_RISE).exp();
+        let alpha_down = 1.0 - (-frame_dt / VIZ_TAU_FALL).exp();
+        ns.viz_scale = if target > current {
+            current * (1.0 - alpha_up) + target * alpha_up
+        } else {
+            current * (1.0 - alpha_down) + target * alpha_down
+        };
+        let rgba = velocity_to_rgba(&ns.velocity, ns.viz_scale);
 
         handle.tensor = rgba;
         handle.upload = true;
@@ -434,7 +569,7 @@ fn fps_update_system(
 fn main() {
     App::new()
         .add_plugins((
-            DefaultPlugins,
+            DefaultPlugins.set(ImagePlugin::default_nearest()),
             FrameTimeDiagnosticsPlugin::default(),
             BevyBurnBridgePlugin::<BurnBackend>::default(),
         ))

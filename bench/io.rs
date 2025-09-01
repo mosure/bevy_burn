@@ -21,6 +21,7 @@ use bevy_burn::{
     BevyBurnBridgePlugin,
     BevyBurnHandle,
     BindingDirection,
+    TransferKind,
 };
 
 
@@ -35,7 +36,10 @@ fn default_app() -> App {
 
     app.add_plugins(MinimalPlugins);
     app.insert_resource(Assets::<Image>::default());
-    app.add_plugins(BevyBurnBridgePlugin::<BurnBackend>::default());
+    app.add_plugins(BevyBurnBridgePlugin::<BurnBackend> {
+        cpu_only: true,
+        ..default()
+    });
 
     app
 }
@@ -58,7 +62,7 @@ fn make_image() -> Image {
 }
 
 
-fn bench_burn_to_bevy(crit: &mut Criterion) {
+fn bench_burn_to_bevy_cpu(crit: &mut Criterion) {
     let mut app = default_app();
 
     app.add_systems(
@@ -80,6 +84,7 @@ fn bench_burn_to_bevy(crit: &mut Criterion) {
                         tensor,
                         upload: true,
                         direction: BindingDirection::BurnToBevy,
+                        xfer: TransferKind::Cpu,
                     });
                 },
     );
@@ -107,7 +112,7 @@ fn bench_burn_to_bevy(crit: &mut Criterion) {
 }
 
 
-fn bench_bevy_to_burn(crit: &mut Criterion) {
+fn bench_bevy_to_burn_cpu(crit: &mut Criterion) {
     let mut app = default_app();
 
     app.add_systems(
@@ -129,6 +134,110 @@ fn bench_bevy_to_burn(crit: &mut Criterion) {
                         tensor,
                         upload: true,
                         direction: BindingDirection::BevyToBurn,
+                        xfer: TransferKind::Cpu,
+                    });
+                },
+    );
+
+    app.add_systems(
+        PostUpdate,
+        |mut query: Query<&mut BevyBurnHandle<BurnBackend>>| {
+            for mut handle in query.iter_mut() {
+                handle.upload = true;
+            }
+        },
+    );
+
+    app.update();
+
+    let mut group = crit.benchmark_group("bevy_to_burn");
+    group.throughput(Throughput::Elements(1));
+
+    group.bench_function(BenchmarkId::new("image_to_tensor", SIZE), |b| {
+        b.iter(|| {
+            app.update();
+        });
+    });
+    group.finish();
+}
+
+
+
+
+
+fn bench_burn_to_bevy_gpu(crit: &mut Criterion) {
+    let mut app = default_app();
+
+    app.add_systems(
+        Startup,
+        |
+                    mut cmds: Commands,
+                    mut images: ResMut<Assets<Image>>,
+                | {
+                    let handle = images.add(make_image());
+                    let tensor = Tensor::<BurnBackend, 3>::zeros([
+                            SIZE as usize,
+                            SIZE as usize,
+                            4,
+                        ],
+                        &Default::default(),
+                    );
+                    cmds.spawn(BevyBurnHandle {
+                        bevy_image: handle,
+                        tensor,
+                        upload: true,
+                        direction: BindingDirection::BurnToBevy,
+                        xfer: TransferKind::Gpu,
+                    });
+                },
+    );
+
+    app.add_systems(
+        PostUpdate,
+        |mut query: Query<&mut BevyBurnHandle<BurnBackend>>| {
+            for mut handle in query.iter_mut() {
+                handle.upload = true;
+            }
+        },
+    );
+
+    app.update();
+
+    let mut group = crit.benchmark_group("burn_to_bevy");
+    group.throughput(Throughput::Elements(1));
+
+    group.bench_function(BenchmarkId::new("tensor_to_image", SIZE), |b| {
+        b.iter(|| {
+            app.update();
+        });
+    });
+    group.finish();
+}
+
+
+fn bench_bevy_to_burn_gpu(crit: &mut Criterion) {
+    let mut app = default_app();
+
+    app.add_systems(
+        Startup,
+        |
+                    mut cmds: Commands,
+                    mut images: ResMut<Assets<Image>>,
+                | {
+                    let handle = images.add(make_image());
+                    let tensor = Tensor::<BurnBackend, 3>::zeros([
+                            SIZE as usize,
+                            SIZE as usize,
+                            4,
+                        ],
+                        &Default::default(),
+                    );
+                    cmds.spawn(BevyBurnHandle {
+                        bevy_image: handle,
+                        tensor,
+                        upload: true,
+                        direction: BindingDirection::BevyToBurn,
+                        xfer: TransferKind::Gpu,
                     });
                 },
     );
@@ -161,7 +270,9 @@ fn bench_bevy_to_burn(crit: &mut Criterion) {
 criterion_group!{
     name = io_benches;
     config = Criterion::default().sample_size(10);
-    targets = bench_burn_to_bevy,
-              bench_bevy_to_burn,
+    targets = bench_burn_to_bevy_cpu,
+              bench_bevy_to_burn_cpu,
+              bench_burn_to_bevy_gpu,
+              bench_bevy_to_burn_gpu,
 }
 criterion_main!(io_benches);

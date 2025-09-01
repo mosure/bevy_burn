@@ -31,12 +31,13 @@ exclude = [
 
 
 [dependencies]
-burn = { version = "0.18" }
-burn-core = { version = "0.18" }
+burn = { version = "0.18", features = ["wgpu"] }
 burn-autodiff = { version = "0.18" }
+burn-core = { version = "0.18" }
+burn-fusion = { version = "0.18" }
 burn-wgpu = { version = "0.18" }
 bytemuck = "1.23"
-# wgpu = "25.0"
+wgpu = "25.0"
 
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -54,10 +55,16 @@ features = [
   "bevy_core_pipeline",
   "bevy_image",
   "bevy_log",
+  "bevy_pbr",
   "bevy_render",
+  "bevy_sprite",
+  "bevy_text",
   "bevy_ui",
+  "bevy_window",
   "bevy_winit",
+  "default_font",
   "png",
+  "tonemapping_luts",
   "webgpu",
   "x11",
   "zstd_rust",
@@ -101,6 +108,12 @@ codegen-units = 1
 [[example]]
 name = "navier_stokes"
 path = "example/navier_stokes.rs"
+
+
+[[example]]
+name = "gpu_interop"
+path = "example/gpu_interop.rs"
+
 
 
 [[bench]]

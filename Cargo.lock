@@ -574,6 +574,7 @@ dependencies = [
  "burn",
  "burn-autodiff",
  "burn-core",
+ "burn-fusion",
  "burn-wgpu",
  "bytemuck",
  "console_error_panic_hook",
@@ -581,6 +582,7 @@ dependencies = [
  "getrandom 0.3.3",
  "wasm-bindgen",
  "web-sys",
+ "wgpu",
 ]
 
 [[package]]
@@ -712,6 +714,7 @@ dependencies = [
  "bevy_gizmos_macros",
  "bevy_image",
  "bevy_math",
+ "bevy_pbr",
  "bevy_reflect",
  "bevy_render",
  "bevy_sprite",
@@ -752,6 +755,7 @@ dependencies = [
  "guillotiere",
  "half 2.6.0",
  "image",
+ "ktx2",
  "rectangle-pack",
  "ruzstd",
  "serde",
@@ -4363,6 +4367,15 @@ name = "khronos_api"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
+
+[[package]]
+name = "ktx2"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff7f53bdf698e7aa7ec916411bbdc8078135da11b66db5182675b2227f6c0d07"
+dependencies = [
+ "bitflags 2.9.1",
+]
 
 [[package]]
 name = "lazy_static"
