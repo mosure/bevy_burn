@@ -3,8 +3,8 @@
 use std::marker::PhantomData;
 
 use bevy::{
-    asset::Handle,
     prelude::*,
+    asset::Handle,
     render::{
         render_asset::{RenderAssetUsages, RenderAssets},
         render_resource::*,
@@ -12,7 +12,9 @@ use bevy::{
             RenderAdapter, RenderAdapterInfo, RenderDevice, RenderInstance, RenderQueue,
         },
         texture::GpuImage,
-        Extract, ExtractSchedule, Render, RenderApp, RenderSystems,
+        Extract, ExtractSchedule,
+        sync_world::{RenderEntity, SyncToRenderWorld},
+        Render, RenderApp, RenderSystems,
     },
     utils::WgpuWrapper,
 };
@@ -27,7 +29,7 @@ use burn::{
 
 pub mod gpu_burn_to_bevy;
 use gpu_burn_to_bevy::{
-    // AsWgpuRes,
+    BurnBevyPrepare,
     GpuBurnToBevyPlugin,
 };
 
@@ -77,8 +79,9 @@ pub struct BevyBurnBridgePlugin<B: Backend> {
 }
 
 impl<B: Backend> Plugin for BevyBurnBridgePlugin<B>
-// where
-//     (): AsWgpuRes<B>,
+where
+    B: Backend + 'static,
+    (): BurnBevyPrepare<B>,
 {
     fn build(&self, app: &mut App) {
         // cpu path in main world
@@ -87,6 +90,8 @@ impl<B: Backend> Plugin for BevyBurnBridgePlugin<B>
         if self.cpu_only {
             return;
         }
+
+        app.add_systems(First, ensure_sync_to_render_world::<B>);
 
         app.add_plugins(GpuBurnToBevyPlugin::<B>::default());
     }
@@ -140,6 +145,19 @@ impl<B: Backend> Plugin for BevyBurnBridgePlugin<B>
         };
 
         app.insert_resource(BurnDevice(burn_device));
+    }
+}
+
+
+/// make sure entities we care about are synced into the render world
+fn ensure_sync_to_render_world<B: Backend>(
+    mut commands: Commands,
+    q: Query<(Entity, Option<&SyncToRenderWorld>), With<BevyBurnHandle<B>>>,
+) {
+    for (e, synced) in &q {
+        if synced.is_none() {
+            commands.entity(e).insert(SyncToRenderWorld);
+        }
     }
 }
 
@@ -261,35 +279,31 @@ struct ExtractedGpuHandle<B: Backend> {
 }
 
 fn extract_gpu_handles<B: Backend>(
-    mut commands: bevy::prelude::Commands,
-    q: Extract<Query<(Entity, &BevyBurnHandle<B>)>>,
+    mut commands: Commands,
+    q: Extract<Query<(RenderEntity, &BevyBurnHandle<B>)>>,
 ) {
     let mut seen = 0usize;
-    let mut inserted = 0usize;
-    for (entity, h) in &q {
+
+    for (render_entity, h) in &q {
         seen += 1;
         if h.xfer != TransferKind::Gpu {
             continue;
         }
-        // TODO: may need to hard spawn here? or get MainEntity, lookup bgs
-        commands
-            .entity(entity)
-            .insert(
-                ExtractedGpuHandle::<B> {
-                    image: h.bevy_image.clone(),
-                    tensor: h.tensor.clone(),
-                    direction: h.direction,
-                    upload: h.upload,
-                }
-            );
 
-        inserted += 1;
+        commands.entity(render_entity).insert(ExtractedGpuHandle::<B> {
+            image: h.bevy_image.clone(),
+            tensor: h.tensor.clone(),
+            direction: h.direction,
+            upload: h.upload,
+        });
+
+        seen += 1;
     }
 
     info!(
         target: "bevy_burn::extract",
-        "extract_gpu_handles: seen={}, inserted={}",
-        seen, inserted
+        "extract_gpu_handles: seen={}",
+        seen
     );
 }
 
@@ -387,10 +401,9 @@ fn gpu_bevy_to_burn<B: Backend>(
 mod cpu_tests {
     use super::*;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-    use burn_autodiff::Autodiff;
     use burn_wgpu::Wgpu;
 
-    type BurnBackend = Autodiff<Wgpu<f32, i32>>;
+    type BurnBackend = Wgpu<f32, i32>;
 
     fn default_app() -> App {
         let mut app = App::new();

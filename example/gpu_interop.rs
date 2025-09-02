@@ -3,12 +3,11 @@ use bevy::render::{
     render_asset::RenderAssetUsages,
     render_resource::*,
 };
-use burn_autodiff::Autodiff;
 use burn_core::tensor::Int;
 use burn_wgpu::Wgpu as BurnWgpu;
 use bevy_burn::*;
 
-type BB = Autodiff<BurnWgpu<f32, i32>>;
+type BB = BurnWgpu<f32, i32>;
 
 fn main() {
     App::new()
@@ -31,13 +30,14 @@ fn setup(
     let mut img = Image::new_fill(
         size,
         TextureDimension::D2,
-        &[255, 0, 0, 255],
-        TextureFormat::Rgba8UnormSrgb,
+        &[0; 16],
+        TextureFormat::Rgba32Float,
         RenderAssetUsages::RENDER_WORLD, // no main-world CPU copy
     );
     img.texture_descriptor.usage |= TextureUsages::COPY_SRC
         | TextureUsages::COPY_DST
-        | TextureUsages::TEXTURE_BINDING;
+        | TextureUsages::TEXTURE_BINDING
+        | TextureUsages::STORAGE_BINDING;
     let handle = images.add(img);
 
     // create a burn tensor gradient

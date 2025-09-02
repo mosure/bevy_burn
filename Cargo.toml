@@ -32,11 +32,12 @@ exclude = [
 
 [dependencies]
 burn = { version = "0.18", features = ["wgpu"] }
-burn-autodiff = { version = "0.18" }
 burn-core = { version = "0.18" }
+burn-cubecl = { version = "0.18" }
 burn-fusion = { version = "0.18" }
 burn-wgpu = { version = "0.18" }
 bytemuck = "1.23"
+cubecl = { version = "0.6", features = ["std", "wgpu"] }
 wgpu = "25.0"
 
 
@@ -62,6 +63,7 @@ features = [
   "bevy_ui",
   "bevy_window",
   "bevy_winit",
+  "debug",
   "default_font",
   "png",
   "tonemapping_luts",
