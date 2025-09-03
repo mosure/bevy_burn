@@ -1,64 +1,109 @@
-# bevy_burn
+# bevy_burn 🕊️🔥
 
-
-[![test](https://github.com/mosure/bevy_burn/workflows/test/badge.svg)](https://github.com/Mosure/bevy_burn/actions?query=workflow%3Atest)
 [![GitHub License](https://img.shields.io/github/license/mosure/bevy_burn)](https://raw.githubusercontent.com/mosure/bevy_burn/main/LICENSE)
-[![GitHub Last Commit](https://img.shields.io/github/last-commit/mosure/bevy_burn)](https://github.com/mosure/bevy_burn)
-[![GitHub Releases](https://img.shields.io/github/v/release/mosure/bevy_burn?include_prereleases&sort=semver)](https://github.com/mosure/bevy_burn/releases)
-[![GitHub Issues](https://img.shields.io/github/issues/mosure/bevy_burn)](https://github.com/mosure/bevy_burn/issues)
-[![Average time to resolve an issue](https://isitmaintained.com/badge/resolution/mosure/bevy_burn.svg)](http://isitmaintained.com/project/mosure/bevy_burn)
 [![crates.io](https://img.shields.io/crates/v/bevy_burn.svg)](https://crates.io/crates/bevy_burn)
 
-bevy burn async compute nodes. write compute shaders in burn with wgpu input and output buffers shared with bevy's render pipeline.
+bevy burn data bridge plugin
+
+
+
+
+
+## features
+- [ ] bevy texture -> burn tensor
+- [x] burn tensor -> bevy texture
 
 
 ## usage
 
+### burn -> bevy gpu example
+
+`cargo run --bin gpu_interop`
+
 ```rust
 use bevy::prelude::*;
-use bevy_burn::{
-    BurnInference,
-    BurnModel,
-    BurnPlugin,
+use bevy::render::{
+    render_asset::RenderAssetUsages,
+    render_resource::*,
 };
+use burn_core::tensor::Int;
+use burn_wgpu::Wgpu as BurnWgpu;
+use bevy_burn::*;
 
+type BB = BurnWgpu<f32, i32>;
 
 fn main() {
-    App::build()
+    App::new()
         .add_plugins(DefaultPlugins)
-        .add_plugin(BurnPlugin)
-        .add_system(Startup, setup)
-        .add_system(Update, burn_inference)
+        .add_plugins(BevyBurnBridgePlugin::<BB>::default())
+        .add_systems(Startup, setup)
         .run();
 }
 
 fn setup(
-    mut commands: Commands,
-    burn_models: Res<Assets<BurnModel>>,
+    mut cmds: Commands,
+    mut images: ResMut<Assets<Image>>,
 ) {
-    let model = burn_models.load("model.onnx");
-    let input = SomeInput::default();
+    let size = Extent3d {
+        width: 256,
+        height: 256,
+        depth_or_array_layers: 1,
+    };
+    let mut img = Image::new_fill(
+        size,
+        TextureDimension::D2,
+        &[0; 16],
+        TextureFormat::Rgba32Float,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    img.texture_descriptor.usage |= TextureUsages::COPY_SRC
+        | TextureUsages::COPY_DST
+        | TextureUsages::TEXTURE_BINDING
+        | TextureUsages::STORAGE_BINDING;
+    let handle = images.add(img);
 
-    commands.spawn().insert(input).insert(model);
-}
+    let h = size.height as usize;
+    let w = size.width as usize;
+    let dev = Default::default();
+    let xs = burn_core::tensor::Tensor::<BB, 1, Int>::arange(0..(w * h * 4) as i64, &dev)
+        .float()
+        .div_scalar((w * h * 4) as f32);
+    let rgba = xs.reshape([h, w, 4]);
 
-fn burn_inference(
-    mut commands: Commands,
-    burn_inference: Res<BurnInference>,
-    burn_models: Res<Assets<BurnModel>>,
-    input_data: Query<(
-        Entity,
-        &SomeInput,
-        &Handle<BurnModel>,
-        Without<BurnOutput>,
-    )>,
-) {
-    for (entity, model_handle, input, _) in input_data.iter() {
-        if let Some(model) = burn_models.get(model_handle) {
-            let output = model.inference(input).unwrap();
+    cmds.spawn((
+        ImageNode {
+            image: handle.clone(),
+            ..default()
+        },
+        BevyBurnHandle::<BB> {
+            bevy_image: handle,
+            tensor: rgba,
+            upload: true,
+            direction: BindingDirection::BurnToBevy,
+            xfer: TransferKind::Gpu,
+        },
+    ));
 
-            commands.entity(entity).insert(output);
-        }
-    }
+    cmds.spawn(Camera2d);
 }
 ```
+
+
+## compatible bevy versions
+
+| `bevy_burn` | `bevy`  | `burn` |
+| :--         | :--     | :--    |
+| `0.3`       | `0.17-dev*` | `0.18` |
+
+
+## license
+licensed under either of
+
+ * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+ * MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
+
+
+## analytics
+![alt](https://repobeats.axiom.co/api/embed/0a4b4e14072c91c5a971db920bd9a3df0e430a65.svg "analytics")

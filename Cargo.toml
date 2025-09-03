@@ -1,7 +1,7 @@
 [package]
 name = "bevy_burn"
-description = "bevy burn wgpu compute nodes"
-version = "0.1.0"
+description = "bevy burn bindings"
+version = "0.3.0"
 edition = "2021"
 authors = ["mosure <mitchell@mosure.me>"]
 license = "MIT"
@@ -31,34 +31,50 @@ exclude = [
 
 
 [dependencies]
-burn = { version = "0.11.1", features = ["wgpu"] }
-bytemuck = "1.14"
-wgpu = "0.17.1"
-
-
-[build-dependencies]
-burn-import = "0.11.1"
+burn = { version = "0.18", features = ["wgpu"] }
+burn-core = { version = "0.18" }
+burn-cubecl = { version = "0.18" }
+burn-fusion = { version = "0.18" }
+burn-wgpu = { version = "0.18" }
+bytemuck = "1.23"
+cubecl = { version = "0.6", features = ["std", "wgpu"] }
+wgpu = "25.0"
 
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
+getrandom = { version = "0.3", default-features = false, features = ["wasm_js"] }
 wasm-bindgen = "0.2"
 
 
 [dependencies.bevy]
-version = "0.12"
+git = "https://github.com/bevyengine/bevy.git"
+rev = "b79b8133c881942a42bb359f998bd8792c48c1bc"
 default-features = false
 features = [
-  "asset_processor",
   "bevy_asset",
   "bevy_core_pipeline",
+  "bevy_image",
+  "bevy_log",
+  "bevy_pbr",
   "bevy_render",
+  "bevy_sprite",
+  "bevy_text",
+  "bevy_ui",
+  "bevy_window",
   "bevy_winit",
+  "debug",
+  "default_font",
+  "png",
+  "tonemapping_luts",
+  "webgpu",
+  "x11",
+  "zstd_rust",
 ]
 
 
 [dependencies.web-sys]
-version = "0.3.4"
+version = "0.3"
 features = [
   'Document',
   'Element',
@@ -70,7 +86,7 @@ features = [
 
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.7", features = ["html_reports"] }
 
 
 [profile.dev.package."*"]
@@ -89,3 +105,20 @@ inherits = "release"
 opt-level = "z"
 lto = "fat"
 codegen-units = 1
+
+
+[[example]]
+name = "navier_stokes"
+path = "example/navier_stokes.rs"
+
+
+[[example]]
+name = "gpu_interop"
+path = "example/gpu_interop.rs"
+
+
+
+[[bench]]
+name = "io"
+harness = false
+path = "bench/io.rs"
