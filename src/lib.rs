@@ -36,7 +36,7 @@ use gpu_burn_to_bevy::{
 
 
 #[derive(Resource, Deref, DerefMut, Clone, Debug, Hash, PartialEq, Eq)]
-struct BurnDevice(BurnWgpuDevice);
+pub struct BurnDevice(BurnWgpuDevice);
 
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,8 +92,6 @@ where
         }
 
         app.add_systems(First, ensure_sync_to_render_world::<B>);
-
-        app.add_plugins(GpuBurnToBevyPlugin::<B>::default());
     }
 
     fn finish(&self, app: &mut App) {
@@ -105,7 +103,6 @@ where
             .get_sub_app_mut(RenderApp)
             .expect("Failed to setup Burn plugin: RenderApp not found");
 
-        // gpu path
         let burn_device = {
             let bevy_adapter = render_app.world().resource::<RenderAdapter>();
             let wgpu_adapter = unwrap_wgpu_wrapper(&bevy_adapter.0);
@@ -135,7 +132,6 @@ where
 
             render_app
                 .add_systems(ExtractSchedule, extract_gpu_handles::<B>)
-                // Run after GpuImage is prepared.
                 .add_systems(
                     Render,
                     gpu_bevy_to_burn::<B>.in_set(RenderSystems::Queue),
@@ -144,7 +140,10 @@ where
             burn_device
         };
 
+        render_app.insert_resource(BurnDevice(burn_device.clone()));
         app.insert_resource(BurnDevice(burn_device));
+
+        app.add_plugins(GpuBurnToBevyPlugin::<B>::default());
     }
 }
 
@@ -300,7 +299,7 @@ fn extract_gpu_handles<B: Backend>(
         seen += 1;
     }
 
-    info!(
+    debug!(
         target: "bevy_burn::extract",
         "extract_gpu_handles: seen={}",
         seen
@@ -489,15 +488,15 @@ mod cpu_tests {
     }
 }
 
+
 // #[cfg(test)]
 // mod gpu_tests {
 //     use super::*;
 //     use bevy::prelude::*;
 //     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-//     use burn_autodiff::Autodiff;
 //     use burn_wgpu::Wgpu;
 
-//     type BurnBackend = Autodiff<Wgpu<f32, i32>>;
+//     type BurnBackend = Wgpu<f32, i32>;
 
 //     fn render_app() -> App {
 //         let mut app = App::new();

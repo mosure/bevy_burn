@@ -24,7 +24,7 @@ use burn_fusion::client::FusionClient;
 use burn_wgpu::{CubeBackend, FloatElement, IntElement, Wgpu as BurnWgpu, WgpuRuntime};
 
 // from your bridge
-use crate::{BindingDirection, ExtractedGpuHandle};
+use crate::{BindingDirection, BurnDevice, ExtractedGpuHandle};
 
 // log target for easy filtering: RUST_LOG=bevy_burn::gpu_burn_to_bevy=info
 const LOG: &str = "bevy_burn::gpu_burn_to_bevy";
@@ -41,6 +41,7 @@ pub struct CopyBindGroup {
 pub trait BurnBevyPrepare<B: BurnBackend> {
     fn prepare_bind_group(
         tensor: &Tensor<B, 3>,
+        burn_device: &BurnDevice,
         render_device: &RenderDevice,
         layout: &BindGroupLayout,
         texture: &wgpu::Texture,
@@ -57,6 +58,7 @@ where
 {
     fn prepare_bind_group(
         tensor: &Tensor<BurnWgpu<F, I>, 3>,
+        burn_device: &BurnDevice,
         render_device: &RenderDevice,
         layout: &BindGroupLayout,
         texture: &wgpu::Texture,
@@ -67,8 +69,12 @@ where
             warn!(target: LOG, "expected f32 c==4 (rgba32f), got c={c}");
             return None;
         }
-        // resolve tensor into a concrete wgpu-backed storage
-        let prim_fusion = tensor.clone().into_primitive().tensor();
+
+        let prim_fusion = tensor
+            .clone()
+            .to_device(burn_device)
+            .into_primitive()
+            .tensor();
         let fusion_client = prim_fusion.client.clone();
         let base = fusion_client
             .resolve_tensor_float::<CubeBackend<WgpuRuntime, F, I, u32>>(prim_fusion);
@@ -76,8 +82,8 @@ where
             Tensor::from_primitive(TensorPrimitive::Float(base));
         let prim2 = base_img.into_primitive().tensor();
         let client = &prim2.client;
-        client.flush();
         let res = client.get_resource(prim2.handle.clone().binding());
+        client.flush();
 
         // src buffer must be 256B-aligned for binding as storage
         let src_off = res.resource().offset();
@@ -85,6 +91,7 @@ where
             warn!(target: LOG, "tensor storage offset {} is not 256-aligned; cannot bind.", src_off);
             return None;
         }
+
         let src_binding = wgpu::BufferBinding {
             buffer: res.resource().buffer(),
             offset: src_off,
@@ -205,7 +212,7 @@ impl<B: BurnBackend> Node for BurnCopyNode<B>
             debug!(target: LOG, "node.run: pipeline not ready yet");
         }
 
-        info!(
+        debug!(
             target: LOG,
             "node.run: finished (seen={})",
             seen
@@ -246,21 +253,17 @@ where
 
         let render_app = app.sub_app_mut(RenderApp);
 
+        render_app.init_resource::<Rgba32fPipe>();
+
         render_app.add_systems(
             Render,
             queue_copy_bind_groups::<B>.in_set(RenderSystems::Queue),
         );
 
-        info!(target: LOG, "plugin.build: adding render graph node + edge");
         let node = BurnCopyNode::<B>::from_world(render_app.world_mut());
         let mut graph = render_app.world_mut().resource_mut::<RenderGraph>();
         graph.add_node(CopyNodeLabel, node);
         graph.add_node_edge(CopyNodeLabel, CameraDriverLabel);
-    }
-
-    fn finish(&self, app: &mut App) {
-        let render_app = app.sub_app_mut(RenderApp);
-        render_app.init_resource::<Rgba32fPipe>();
     }
 }
 
@@ -269,6 +272,7 @@ where
 #[allow(clippy::type_complexity)]
 fn queue_copy_bind_groups<B: BurnBackend>(
     mut commands: Commands,
+    burn_device: Res<BurnDevice>,
     render_device: Res<RenderDevice>,
     pipe: Res<Rgba32fPipe>,
     images: Res<RenderAssets<GpuImage>>,
@@ -296,6 +300,7 @@ fn queue_copy_bind_groups<B: BurnBackend>(
         // produce a bind group targeting the current texture
         if let Some(bg) = <() as BurnBevyPrepare<B>>::prepare_bind_group(
             &h.tensor,
+            &burn_device,
             &render_device,
             &pipe.bgl,
             &gpu_image.texture,
