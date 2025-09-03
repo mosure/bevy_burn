@@ -408,7 +408,10 @@ mod cpu_tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.insert_resource(Assets::<Image>::default());
-        app.add_plugins(BevyBurnBridgePlugin::<BurnBackend>::default());
+        app.add_plugins(BevyBurnBridgePlugin::<BurnBackend> {
+            cpu_only: true,
+            ..default()
+        });
         app
     }
 
