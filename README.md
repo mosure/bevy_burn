@@ -89,11 +89,13 @@ fn setup(
 ```
 
 
-## compatible bevy versions
+## compatible versions
 
 | `bevy_burn` | `bevy`  | `burn` |
 | :--         | :--     | :--    |
 | `0.3`       | `0.17-dev*` | `0.18` |
+
+> *`wgpu` version must match
 
 
 ## license
