@@ -112,8 +112,8 @@ where
 
         let copy_w = Ord::min(w as u32, extent.width);
         let copy_h = Ord::min(h as u32, extent.height);
-        let gx = (copy_w + 15) / 16;
-        let gy = (copy_h + 15) / 16;
+        let gx = copy_w.div_ceil(16);
+        let gy = copy_h.div_ceil(16);
 
         Some(CopyBindGroup {
             bg,

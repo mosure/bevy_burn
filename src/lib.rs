@@ -304,7 +304,7 @@ fn padded_bytes_per_row(width: u32, bytes_per_pixel: u32) -> u32 {
     // wgpu COPY_BYTES_PER_ROW_ALIGNMENT is 256
     const ALIGN: u32 = 256;
     let row = width * bytes_per_pixel;
-    ((row + ALIGN - 1) / ALIGN) * ALIGN
+    row.div_ceil(ALIGN) * ALIGN
 }
 
 /// bevy image -> burn (gpu-side). schedules copy + readback; blocks to map.
