@@ -4,19 +4,19 @@ use std::marker::PhantomData;
 
 use bevy::{
     prelude::*,
-    asset::Handle,
+    asset::{Handle, RenderAssetUsages},
     render::{
-        render_asset::{RenderAssetUsages, RenderAssets},
+        render_asset::RenderAssets,
         render_resource::*,
         renderer::{
             RenderAdapter, RenderAdapterInfo, RenderDevice, RenderInstance, RenderQueue,
+            WgpuWrapper,
         },
         texture::GpuImage,
         Extract, ExtractSchedule,
         sync_world::{RenderEntity, SyncToRenderWorld},
         Render, RenderApp, RenderSystems,
     },
-    utils::WgpuWrapper,
 };
 use burn::{
     backend::wgpu::{

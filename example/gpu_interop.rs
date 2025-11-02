@@ -1,9 +1,9 @@
 #![recursion_limit = "256"]
 
 use bevy::prelude::*;
-use bevy::render::{
-    render_asset::RenderAssetUsages,
-    render_resource::*,
+use bevy::{
+    asset::RenderAssetUsages,
+    render::render_resource::*,
 };
 use burn_core::tensor::{Int, Tensor};
 use burn_wgpu::Wgpu as BurnWgpu;

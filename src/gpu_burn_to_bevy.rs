@@ -1,7 +1,6 @@
 // src/gpu_burn_to_bevy.rs
 
-use std::borrow::Cow;
-use std::marker::PhantomData;
+use std::{borrow::Cow, marker::PhantomData, num::NonZeroU64};
 
 use bevy::{
     prelude::*,
@@ -20,7 +19,6 @@ use bevy::{
     },
 };
 use burn::tensor::{backend::Backend as BurnBackend, Tensor, TensorPrimitive};
-use burn_fusion::client::FusionClient;
 use burn_wgpu::{CubeBackend, FloatElement, IntElement, Wgpu as BurnWgpu, WgpuRuntime};
 
 // from your bridge
@@ -86,16 +84,17 @@ where
         client.flush();
 
         // src buffer must be 256B-aligned for binding as storage
-        let src_off = res.resource().offset();
-        if src_off & 0xFF != 0 {
+        let resource = res.resource();
+        let src_off = resource.offset;
+        if src_off & 0xFFu64 != 0 {
             warn!(target: LOG, "tensor storage offset {} is not 256-aligned; cannot bind.", src_off);
             return None;
         }
 
         let src_binding = wgpu::BufferBinding {
-            buffer: res.resource().buffer(),
+            buffer: &resource.buffer,
             offset: src_off,
-            size: std::num::NonZero::new(res.resource().size()).into(),
+            size: NonZeroU64::new(resource.size),
         };
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());

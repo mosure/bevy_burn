@@ -31,14 +31,14 @@ exclude = [
 
 
 [dependencies]
-burn = { version = "0.18", features = ["wgpu"] }
-burn-core = { version = "0.18" }
-burn-cubecl = { version = "0.18" }
-burn-fusion = { version = "0.18" }
-burn-wgpu = { version = "0.18" }
+burn = { version = "0.19", features = ["wgpu"] }
+burn-core = { version = "0.19" }
+burn-cubecl = { version = "0.19" }
+burn-fusion = { version = "0.19" }
+burn-wgpu = { version = "0.19" }
 bytemuck = "1.23"
-cubecl = { version = "0.6", features = ["std", "wgpu"] }
-wgpu = "25.0"
+cubecl = { version = "0.7", features = ["std", "wgpu"] }
+wgpu = "26.0"
 
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -48,8 +48,7 @@ wasm-bindgen = "0.2"
 
 
 [dependencies.bevy]
-git = "https://github.com/bevyengine/bevy.git"
-rev = "b79b8133c881942a42bb359f998bd8792c48c1bc"
+version = "0.17"
 default-features = false
 features = [
   "bevy_asset",

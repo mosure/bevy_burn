@@ -7,8 +7,6 @@ bevy burn data bridge plugin
 
 
 
-
-
 ## features
 - [ ] bevy texture -> burn tensor
 - [x] burn tensor -> bevy texture

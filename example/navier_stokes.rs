@@ -2,16 +2,14 @@
 
 use bevy::{
     prelude::*,
+    asset::RenderAssetUsages,
     color::palettes::css::GOLD,
     diagnostic::{
         DiagnosticsStore,
         FrameTimeDiagnosticsPlugin,
     },
-    render::{
-        texture::ImagePlugin,
-        render_asset::RenderAssetUsages,
-        render_resource::*,
-    },
+    image::ImagePlugin,
+    render::render_resource::*,
 };
 use bevy_burn::{
     BevyBurnBridgePlugin,

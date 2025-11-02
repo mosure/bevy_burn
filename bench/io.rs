@@ -8,10 +8,8 @@ use criterion::{
 
 use bevy::{
     prelude::*,
-    render::{
-        render_asset::RenderAssetUsages,
-        render_resource::*,
-    },
+    asset::RenderAssetUsages,
+    render::render_resource::*,
 };
 use burn::tensor::Tensor;
 use burn_wgpu::Wgpu;
