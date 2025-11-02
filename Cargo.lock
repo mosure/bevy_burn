@@ -571,6 +571,7 @@ dependencies = [
  "console_error_panic_hook",
  "criterion",
  "cubecl 0.7.0",
+ "futures",
  "getrandom 0.3.3",
  "wasm-bindgen",
  "web-sys",

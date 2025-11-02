@@ -1,32 +1,14 @@
-use criterion::{
-    BenchmarkId,
-    criterion_group,
-    criterion_main,
-    Criterion,
-    Throughput,
-};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
-use bevy::{
-    prelude::*,
-    asset::RenderAssetUsages,
-    render::render_resource::*,
-};
+use bevy::{asset::RenderAssetUsages, prelude::*, render::render_resource::*};
 use burn::tensor::Tensor;
 use burn_wgpu::Wgpu;
 
-use bevy_burn::{
-    BevyBurnBridgePlugin,
-    BevyBurnHandle,
-    BindingDirection,
-    TransferKind,
-};
-
+use bevy_burn::{BevyBurnBridgePlugin, BevyBurnHandle, BindingDirection, TransferKind};
 
 type BurnBackend = Wgpu<f32, i32>;
 
-
 const SIZE: u32 = 512;
-
 
 fn default_app() -> App {
     let mut app = App::new();
@@ -40,7 +22,6 @@ fn default_app() -> App {
 
     app
 }
-
 
 fn make_image() -> Image {
     let mut img = Image::new_fill(
@@ -58,32 +39,25 @@ fn make_image() -> Image {
     img
 }
 
-
 fn bench_burn_to_bevy_cpu(crit: &mut Criterion) {
     let mut app = default_app();
 
     app.add_systems(
         Startup,
-        |
-                    mut cmds: Commands,
-                    mut images: ResMut<Assets<Image>>,
-                | {
-                    let handle = images.add(make_image());
-                    let tensor = Tensor::<BurnBackend, 3>::zeros([
-                            SIZE as usize,
-                            SIZE as usize,
-                            4,
-                        ],
-                        &Default::default(),
-                    );
-                    cmds.spawn(BevyBurnHandle {
-                        bevy_image: handle,
-                        tensor,
-                        upload: true,
-                        direction: BindingDirection::BurnToBevy,
-                        xfer: TransferKind::Cpu,
-                    });
-                },
+        |mut cmds: Commands, mut images: ResMut<Assets<Image>>| {
+            let handle = images.add(make_image());
+            let tensor = Tensor::<BurnBackend, 3>::zeros(
+                [SIZE as usize, SIZE as usize, 4],
+                &Default::default(),
+            );
+            cmds.spawn(BevyBurnHandle {
+                bevy_image: handle,
+                tensor,
+                upload: true,
+                direction: BindingDirection::BurnToBevy,
+                xfer: TransferKind::Cpu,
+            });
+        },
     );
 
     app.add_systems(
@@ -108,32 +82,25 @@ fn bench_burn_to_bevy_cpu(crit: &mut Criterion) {
     group.finish();
 }
 
-
 fn bench_bevy_to_burn_cpu(crit: &mut Criterion) {
     let mut app = default_app();
 
     app.add_systems(
         Startup,
-        |
-                    mut cmds: Commands,
-                    mut images: ResMut<Assets<Image>>,
-                | {
-                    let handle = images.add(make_image());
-                    let tensor = Tensor::<BurnBackend, 3>::zeros([
-                            SIZE as usize,
-                            SIZE as usize,
-                            4,
-                        ],
-                        &Default::default(),
-                    );
-                    cmds.spawn(BevyBurnHandle {
-                        bevy_image: handle,
-                        tensor,
-                        upload: true,
-                        direction: BindingDirection::BevyToBurn,
-                        xfer: TransferKind::Cpu,
-                    });
-                },
+        |mut cmds: Commands, mut images: ResMut<Assets<Image>>| {
+            let handle = images.add(make_image());
+            let tensor = Tensor::<BurnBackend, 3>::zeros(
+                [SIZE as usize, SIZE as usize, 4],
+                &Default::default(),
+            );
+            cmds.spawn(BevyBurnHandle {
+                bevy_image: handle,
+                tensor,
+                upload: true,
+                direction: BindingDirection::BevyToBurn,
+                xfer: TransferKind::Cpu,
+            });
+        },
     );
 
     app.add_systems(
@@ -157,10 +124,6 @@ fn bench_bevy_to_burn_cpu(crit: &mut Criterion) {
     });
     group.finish();
 }
-
-
-
-
 
 // TODO: fix main thread issues for gpu benchmarking/tests
 // fn bench_burn_to_bevy_gpu(crit: &mut Criterion) {
@@ -212,7 +175,6 @@ fn bench_bevy_to_burn_cpu(crit: &mut Criterion) {
 //     group.finish();
 // }
 
-
 // fn bench_bevy_to_burn_gpu(crit: &mut Criterion) {
 //     let mut app = default_app();
 
@@ -262,10 +224,7 @@ fn bench_bevy_to_burn_cpu(crit: &mut Criterion) {
 //     group.finish();
 // }
 
-
-
-
-criterion_group!{
+criterion_group! {
     name = io_benches;
     config = Criterion::default().sample_size(10);
     targets = bench_burn_to_bevy_cpu,
