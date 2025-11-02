@@ -52,6 +52,7 @@ version = "0.17"
 default-features = false
 features = [
   "bevy_asset",
+  "bevy_camera",
   "bevy_core_pipeline",
   "bevy_image",
   "bevy_log",
@@ -60,11 +61,13 @@ features = [
   "bevy_sprite",
   "bevy_text",
   "bevy_ui",
+  "bevy_ui_render",
   "bevy_window",
   "bevy_winit",
   "debug",
   "default_font",
   "png",
+  "std",
   "tonemapping_luts",
   "webgpu",
   "x11",
