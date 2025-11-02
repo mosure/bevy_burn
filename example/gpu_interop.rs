@@ -1,13 +1,10 @@
 #![recursion_limit = "256"]
 
 use bevy::prelude::*;
-use bevy::render::{
-    render_asset::RenderAssetUsages,
-    render_resource::*,
-};
+use bevy::{asset::RenderAssetUsages, render::render_resource::*};
+use bevy_burn::*;
 use burn_core::tensor::{Int, Tensor};
 use burn_wgpu::Wgpu as BurnWgpu;
-use bevy_burn::*;
 
 type BB = BurnWgpu<f32, i32>;
 
@@ -29,11 +26,7 @@ struct Plasma {
     a: Tensor<BB, 2>,
 }
 
-fn setup(
-    mut cmds: Commands,
-    mut images: ResMut<Assets<Image>>,
-    burn: Res<BurnDevice>,
-) {
+fn setup(mut cmds: Commands, mut images: ResMut<Assets<Image>>, burn: Res<BurnDevice>) {
     let size = Extent3d {
         width: SIZE,
         height: SIZE,
@@ -71,13 +64,25 @@ fn setup(
     let x = Tensor::<BB, 2>::zeros([h, 1], &dev) + xs; // [h, w]
     let y = ys + Tensor::<BB, 2>::zeros([1, w], &dev); // [h, w]
     let a1 = Tensor::<BB, 2>::ones([h, w], &dev);
-    let boot_r = x.clone().mul_scalar(8.0).sin().mul_scalar(0.5).add_scalar(0.5);
-    let boot_g = x.clone().add(y.clone())
+    let boot_r = x
+        .clone()
+        .mul_scalar(8.0)
+        .sin()
+        .mul_scalar(0.5)
+        .add_scalar(0.5);
+    let boot_g = x
+        .clone()
+        .add(y.clone())
         .mul_scalar(6.0)
         .sin()
         .mul_scalar(0.5)
         .add_scalar(0.5);
-    let boot_b = y.clone().mul_scalar(8.0).sin().mul_scalar(0.5).add_scalar(0.5);
+    let boot_b = y
+        .clone()
+        .mul_scalar(8.0)
+        .sin()
+        .mul_scalar(0.5)
+        .add_scalar(0.5);
     let rgba = Tensor::<BB, 2>::stack(vec![boot_r, boot_g, boot_b, a1.clone()], 2);
 
     cmds.spawn((
@@ -98,35 +103,31 @@ fn setup(
     cmds.spawn(Camera2d);
 }
 
-
-fn animate_plasma(
-    time: Res<Time>,
-    mut q: Query<(&Plasma, &mut BevyBurnHandle<BB>)>,
-) {
+fn animate_plasma(time: Res<Time>, mut q: Query<(&Plasma, &mut BevyBurnHandle<BB>)>) {
     let t = time.elapsed_secs();
     for (p, mut h) in &mut q {
-        let r = p.x
-            .clone()
-            .mul_scalar(8.0)
-            .add_scalar(t * 1.00)
-            .sin()
-            .mul_scalar(0.5)
-            .add_scalar(0.5);
-        let g = p.x
-            .clone()
-            .add(p.y.clone())
-            .mul_scalar(6.0)
-            .add_scalar(t * 1.37)
-            .sin()
-            .mul_scalar(0.5)
-            .add_scalar(0.5);
-        let b = p.y
-            .clone()
-            .mul_scalar(9.0)
-            .add_scalar(-t * 0.73)
-            .sin()
-            .mul_scalar(0.5)
-            .add_scalar(0.5);
+        let r =
+            p.x.clone()
+                .mul_scalar(8.0)
+                .add_scalar(t * 1.00)
+                .sin()
+                .mul_scalar(0.5)
+                .add_scalar(0.5);
+        let g =
+            p.x.clone()
+                .add(p.y.clone())
+                .mul_scalar(6.0)
+                .add_scalar(t * 1.37)
+                .sin()
+                .mul_scalar(0.5)
+                .add_scalar(0.5);
+        let b =
+            p.y.clone()
+                .mul_scalar(9.0)
+                .add_scalar(-t * 0.73)
+                .sin()
+                .mul_scalar(0.5)
+                .add_scalar(0.5);
         let rgba = Tensor::<BB, 2>::stack(vec![r, g, b, p.a.clone()], 2);
         h.tensor = rgba;
         h.upload = true;

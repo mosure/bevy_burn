@@ -1,12 +1,11 @@
 // src/gpu_burn_to_bevy.rs
 
-use std::borrow::Cow;
-use std::marker::PhantomData;
+use std::{borrow::Cow, marker::PhantomData, num::NonZeroU64};
 
 use bevy::{
-    prelude::*,
     asset::{load_internal_asset, uuid_handle},
     ecs::{query::QueryState, world::FromWorld},
+    prelude::*,
     render::{
         graph::CameraDriverLabel,
         render_asset::RenderAssets,
@@ -14,13 +13,11 @@ use bevy::{
         render_resource::*,
         renderer::{RenderContext, RenderDevice},
         texture::GpuImage,
-        Render,
-        RenderApp,
-        RenderSystems,
+        Render, RenderApp, RenderSystems,
     },
 };
 use burn::tensor::{backend::Backend as BurnBackend, Tensor, TensorPrimitive};
-use burn_fusion::client::FusionClient;
+use burn_cubecl::kernel::into_contiguous_aligned;
 use burn_wgpu::{CubeBackend, FloatElement, IntElement, Wgpu as BurnWgpu, WgpuRuntime};
 
 // from your bridge
@@ -29,14 +26,11 @@ use crate::{BindingDirection, BurnDevice, ExtractedGpuHandle};
 // log target for easy filtering: RUST_LOG=bevy_burn::gpu_burn_to_bevy=info
 const LOG: &str = "bevy_burn::gpu_burn_to_bevy";
 
-
-
 #[derive(Component)]
 pub struct CopyBindGroup {
     pub bg: wgpu::BindGroup,
     pub workgroups: [u32; 3],
 }
-
 
 pub trait BurnBevyPrepare<B: BurnBackend> {
     fn prepare_bind_group(
@@ -48,8 +42,6 @@ pub trait BurnBevyPrepare<B: BurnBackend> {
         extent: Extent3d,
     ) -> Option<CopyBindGroup>;
 }
-
-
 
 impl<F, I> BurnBevyPrepare<BurnWgpu<F, I>> for ()
 where
@@ -76,48 +68,52 @@ where
             .into_primitive()
             .tensor();
         let fusion_client = prim_fusion.client.clone();
-        let base = fusion_client
-            .resolve_tensor_float::<CubeBackend<WgpuRuntime, F, I, u32>>(prim_fusion);
+        let base =
+            fusion_client.resolve_tensor_float::<CubeBackend<WgpuRuntime, F, I, u32>>(prim_fusion);
         let base_img: Tensor<CubeBackend<WgpuRuntime, F, I, u32>, 3> =
             Tensor::from_primitive(TensorPrimitive::Float(base));
         let prim2 = base_img.into_primitive().tensor();
+        let prim2 = into_contiguous_aligned(prim2);
         let client = &prim2.client;
         let res = client.get_resource(prim2.handle.clone().binding());
         client.flush();
 
         // src buffer must be 256B-aligned for binding as storage
-        let src_off = res.resource().offset();
-        if src_off & 0xFF != 0 {
+        let resource = res.resource();
+        let src_off = resource.offset;
+        if src_off & 0xFFu64 != 0 {
             warn!(target: LOG, "tensor storage offset {} is not 256-aligned; cannot bind.", src_off);
             return None;
         }
 
         let src_binding = wgpu::BufferBinding {
-            buffer: res.resource().buffer(),
+            buffer: &resource.buffer,
             offset: src_off,
-            size: std::num::NonZero::new(res.resource().size()).into(),
+            size: NonZeroU64::new(resource.size),
         };
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bg = render_device.wgpu_device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("buffer-rgba32f bg"),
-            layout: layout.value(),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(src_binding),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-            ],
-        });
+        let bg = render_device
+            .wgpu_device()
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("buffer-rgba32f bg"),
+                layout: layout.value(),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(src_binding),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                ],
+            });
 
         let copy_w = Ord::min(w as u32, extent.width);
         let copy_h = Ord::min(h as u32, extent.height);
-        let gx = (copy_w + 15) / 16;
-        let gy = (copy_h + 15) / 16;
+        let gx = copy_w.div_ceil(16);
+        let gy = copy_h.div_ceil(16);
 
         Some(CopyBindGroup {
             bg,
@@ -125,8 +121,6 @@ where
         })
     }
 }
-
-
 
 #[derive(Resource)]
 struct Rgba32fPipe {
@@ -145,7 +139,10 @@ impl FromWorld for Rgba32fPipe {
                 ShaderStages::COMPUTE,
                 (
                     binding_types::storage_buffer_read_only_sized(false, None),
-                    binding_types::texture_storage_2d(TextureFormat::Rgba32Float, StorageTextureAccess::WriteOnly),
+                    binding_types::texture_storage_2d(
+                        TextureFormat::Rgba32Float,
+                        StorageTextureAccess::WriteOnly,
+                    ),
                 ),
             ),
         );
@@ -164,7 +161,6 @@ impl FromWorld for Rgba32fPipe {
     }
 }
 
-
 pub struct BurnCopyNode<B: BurnBackend> {
     bg_q: QueryState<&'static CopyBindGroup>,
     _phantom: PhantomData<B>,
@@ -172,13 +168,14 @@ pub struct BurnCopyNode<B: BurnBackend> {
 
 impl<B: BurnBackend> FromWorld for BurnCopyNode<B> {
     fn from_world(world: &mut World) -> Self {
-        Self { bg_q: world.query(), _phantom: PhantomData }
+        Self {
+            bg_q: world.query(),
+            _phantom: PhantomData,
+        }
     }
 }
 
-
-impl<B: BurnBackend> Node for BurnCopyNode<B>
-{
+impl<B: BurnBackend> Node for BurnCopyNode<B> {
     fn update(&mut self, world: &mut World) {
         self.bg_q.update_archetypes(world);
         debug!(target: LOG, "node.update: query archetypes updated");
@@ -198,12 +195,13 @@ impl<B: BurnBackend> Node for BurnCopyNode<B>
             for bg in self.bg_q.iter_manual(world) {
                 seen += 1;
 
-                let mut pass = render_ctx
-                    .command_encoder()
-                    .begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("buffer-rgba32f write"),
-                        ..Default::default()
-                    });
+                let mut pass =
+                    render_ctx
+                        .command_encoder()
+                        .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("buffer-rgba32f write"),
+                            ..Default::default()
+                        });
                 pass.set_pipeline(p);
                 pass.set_bind_group(0, &bg.bg, &[]);
                 pass.dispatch_workgroups(bg.workgroups[0], bg.workgroups[1], bg.workgroups[2]);
@@ -222,7 +220,6 @@ impl<B: BurnBackend> Node for BurnCopyNode<B>
     }
 }
 
-
 #[derive(Clone, Debug, Eq, Hash, PartialEq, RenderLabel)]
 struct CopyNodeLabel;
 
@@ -232,7 +229,9 @@ pub struct GpuBurnToBevyPlugin<B: BurnBackend> {
 
 impl<B: BurnBackend> Default for GpuBurnToBevyPlugin<B> {
     fn default() -> Self {
-        Self { _phantom: PhantomData }
+        Self {
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -266,7 +265,6 @@ where
         graph.add_node_edge(CopyNodeLabel, CameraDriverLabel);
     }
 }
-
 
 /// build per-entity bind groups from burn tensors (queue stage)
 #[allow(clippy::type_complexity)]

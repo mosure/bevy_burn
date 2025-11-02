@@ -6,9 +6,6 @@
 bevy burn data bridge plugin
 
 
-
-
-
 ## features
 - [ ] bevy texture -> burn tensor
 - [x] burn tensor -> bevy texture
@@ -22,9 +19,9 @@ bevy burn data bridge plugin
 
 ```rust
 use bevy::prelude::*;
-use bevy::render::{
-    render_asset::RenderAssetUsages,
-    render_resource::*,
+use bevy::{
+    asset::RenderAssetUsages,
+    render::render_resource::*,
 };
 use burn_core::tensor::Int;
 use burn_wgpu::Wgpu as BurnWgpu;
@@ -93,6 +90,7 @@ fn setup(
 
 | `bevy_burn` | `bevy`  | `burn` |
 | :--         | :--     | :--    |
+| `0.4`       | `0.17`  | `0.19` |
 | `0.3`       | `0.17-dev*` | `0.18` |
 
 > *`wgpu` version must match
