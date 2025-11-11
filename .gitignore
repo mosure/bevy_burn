@@ -4,6 +4,7 @@ vendor/
 out/
 **/*.rs.bk
 *.pdb
+.vscode/
 
 *.py
 

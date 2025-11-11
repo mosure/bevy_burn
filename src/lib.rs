@@ -17,13 +17,21 @@ use bevy::{
         Extract, ExtractSchedule, Render, RenderApp, RenderSystems,
     },
 };
+#[cfg(target_family = "wasm")]
+use bevy::tasks::{IoTaskPool, Task};
 use burn::{
     backend::wgpu::{
         init_device as init_burn_device, RuntimeOptions as BurnRuntimeOptions,
         WgpuDevice as BurnWgpuDevice, WgpuSetup as BurnWgpuSetup,
     },
     prelude::Backend,
-    tensor::{Int, Tensor},
+    tensor::{Int, Tensor, TensorData},
+};
+#[cfg(target_family = "wasm")]
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
 
 pub mod gpu_burn_to_bevy;
@@ -188,6 +196,7 @@ fn bevy_to_burn_update<B: Backend>(
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn burn_to_bevy_update<B: Backend>(
     mut images: ResMut<Assets<Image>>,
     mut q: Query<&mut BevyBurnHandle<B>>,
@@ -199,63 +208,152 @@ fn burn_to_bevy_update<B: Backend>(
 
         if handle.upload {
             let data = handle.tensor.to_data();
-            let Ok(floats) = data.to_vec::<f32>() else {
-                continue;
-            };
-
-            let mut bytes = Vec::with_capacity(floats.len());
-            for &f in floats.iter() {
-                let v = f.clamp(0.0, 1.0) * 255.0;
-                bytes.push(v.round() as u8);
+            if let Some(bytes) = tensor_data_to_rgba_bytes(&data) {
+                write_tensor_bytes_to_image(&mut handle, &mut images, bytes);
+                handle.upload = false;
             }
-
-            if let Some(img) = images.get_mut(&handle.bevy_image) {
-                if img.height() != handle.tensor.shape().dims[0] as u32
-                    || img.width() != handle.tensor.shape().dims[1] as u32
-                {
-                    info!(
-                        "resizing image from {}x{} to {}x{}",
-                        img.width(),
-                        img.height(),
-                        handle.tensor.shape().dims[1],
-                        handle.tensor.shape().dims[0]
-                    );
-
-                    img.resize(Extent3d {
-                        height: handle.tensor.shape().dims[0] as u32,
-                        width: handle.tensor.shape().dims[1] as u32,
-                        depth_or_array_layers: 1,
-                    });
-                }
-
-                match img.data {
-                    Some(ref mut d) => {
-                        if d.len() == bytes.len() {
-                            d.copy_from_slice(&bytes);
-                        } else {
-                            *d = bytes;
-                        }
-                    }
-                    None => img.data = Some(bytes),
-                }
-            } else {
-                let img = Image::new_fill(
-                    Extent3d {
-                        width: handle.tensor.shape().dims[1] as u32,
-                        height: handle.tensor.shape().dims[0] as u32,
-                        depth_or_array_layers: 1,
-                    },
-                    TextureDimension::D2,
-                    &bytes,
-                    TextureFormat::Rgba8UnormSrgb,
-                    RenderAssetUsages::default(),
-                );
-                handle.bevy_image = images.add(img);
-            }
-
-            handle.upload = false;
         }
     }
+}
+
+fn tensor_data_to_rgba_bytes(data: &TensorData) -> Option<Vec<u8>> {
+    let floats = data.to_vec::<f32>().ok()?;
+    let mut bytes = Vec::with_capacity(floats.len());
+    for value in floats {
+        let v = value.clamp(0.0, 1.0) * 255.0;
+        bytes.push(v.round() as u8);
+    }
+    Some(bytes)
+}
+
+fn write_tensor_bytes_to_image<B: Backend>(
+    handle: &mut BevyBurnHandle<B>,
+    images: &mut ResMut<Assets<Image>>,
+    bytes: Vec<u8>,
+) {
+    let height = handle.tensor.shape().dims[0] as u32;
+    let width = handle.tensor.shape().dims[1] as u32;
+
+    if let Some(img) = images.get_mut(&handle.bevy_image) {
+        if img.height() != height || img.width() != width {
+            info!(
+                "resizing image from {}x{} to {}x{}",
+                img.width(),
+                img.height(),
+                width,
+                height
+            );
+
+            img.resize(Extent3d {
+                height,
+                width,
+                depth_or_array_layers: 1,
+            });
+        }
+
+        match img.data {
+            Some(ref mut d) => {
+                if d.len() == bytes.len() {
+                    d.copy_from_slice(&bytes);
+                } else {
+                    *d = bytes;
+                }
+            }
+            None => img.data = Some(bytes),
+        }
+    } else {
+        let img = Image::new_fill(
+            Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            &bytes,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::default(),
+        );
+        handle.bevy_image = images.add(img);
+    }
+}
+
+#[cfg(target_family = "wasm")]
+#[derive(Component)]
+struct PendingTensorDownload {
+    task: Task<TensorData>,
+}
+
+#[cfg(target_family = "wasm")]
+fn burn_to_bevy_update<B: Backend>(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    mut q: Query<(Entity, &mut BevyBurnHandle<B>, Option<&mut PendingTensorDownload>)>,
+) {
+    for (entity, mut handle, pending) in &mut q {
+        let is_cpu_download = handle.direction == BindingDirection::BurnToBevy
+            && handle.xfer == TransferKind::Cpu;
+        if !is_cpu_download {
+            if pending.is_some() {
+                commands
+                    .entity(entity)
+                    .remove::<PendingTensorDownload>();
+            }
+            continue;
+        }
+
+        if !handle.upload {
+            if pending.is_some() {
+                commands
+                    .entity(entity)
+                    .remove::<PendingTensorDownload>();
+            }
+            continue;
+        }
+
+        if let Some(mut pending_task) = pending {
+            if let Some(data) = poll_task(&mut pending_task.task) {
+                commands
+                    .entity(entity)
+                    .remove::<PendingTensorDownload>();
+                if let Some(bytes) = tensor_data_to_rgba_bytes(&data) {
+                    write_tensor_bytes_to_image(&mut handle, &mut images, bytes);
+                    handle.upload = false;
+                }
+            }
+            continue;
+        }
+
+        let tensor = handle.tensor.clone();
+        let task = IoTaskPool::get().spawn_local(async move { tensor.into_data_async().await });
+        commands
+            .entity(entity)
+            .insert(PendingTensorDownload { task });
+    }
+}
+
+#[cfg(target_family = "wasm")]
+fn poll_task<T>(task: &mut Task<T>) -> Option<T> {
+    let waker = noop_waker();
+    let mut ctx = Context::from_waker(&waker);
+    match Pin::new(task).poll(&mut ctx) {
+        Poll::Ready(res) => Some(res),
+        Poll::Pending => None,
+    }
+}
+
+#[cfg(target_family = "wasm")]
+fn noop_waker() -> Waker {
+    use std::ptr;
+
+    unsafe fn clone(_: *const ()) -> RawWaker {
+        RawWaker::new(ptr::null(), &VTABLE)
+    }
+    unsafe fn wake(_: *const ()) {}
+    unsafe fn wake_by_ref(_: *const ()) {}
+    unsafe fn drop(_: *const ()) {}
+
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+    unsafe { Waker::from_raw(RawWaker::new(ptr::null(), &VTABLE)) }
 }
 
 // ---------- gpu path (render world) ----------
