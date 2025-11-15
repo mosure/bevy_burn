@@ -614,7 +614,7 @@ mod gpu_tests {
             texture::GpuImage,
         },
     };
-    use burn_wgpu::wgpu::{
+    use burn_wgpu::{
         init_device as init_burn_device, RuntimeOptions as BurnRuntimeOptions,
         WgpuSetup as BurnWgpuSetup,
     };
