@@ -1,6 +1,6 @@
 // src/gpu_burn_to_bevy.rs
 
-use std::{borrow::Cow, marker::PhantomData, num::NonZeroU64};
+use std::{borrow::Cow, marker::PhantomData, num::NonZeroU64, ops::Deref};
 
 use bevy::{
     asset::{load_internal_asset, uuid_handle},
@@ -11,7 +11,7 @@ use bevy::{
         render_asset::RenderAssets,
         render_graph::{Node, NodeRunError, RenderGraph, RenderGraphContext, RenderLabel},
         render_resource::*,
-        renderer::{RenderContext, RenderDevice},
+        renderer::{RenderContext, RenderDevice, RenderQueue},
         texture::GpuImage,
         Render, RenderApp, RenderSystems,
     },
@@ -30,6 +30,7 @@ const LOG: &str = "bevy_burn::gpu_burn_to_bevy";
 pub struct CopyBindGroup {
     pub bg: wgpu::BindGroup,
     pub workgroups: [u32; 3],
+    pub scratch: Option<Buffer>,
 }
 
 pub trait BurnBevyPrepare<B: BurnBackend> {
@@ -37,6 +38,7 @@ pub trait BurnBevyPrepare<B: BurnBackend> {
         tensor: &Tensor<B, 3>,
         burn_device: &BurnDevice,
         render_device: &RenderDevice,
+        render_queue: &RenderQueue,
         layout: &BindGroupLayout,
         texture: &wgpu::Texture,
         extent: Extent3d,
@@ -52,6 +54,7 @@ where
         tensor: &Tensor<BurnWgpu<F, I>, 3>,
         burn_device: &BurnDevice,
         render_device: &RenderDevice,
+        render_queue: &RenderQueue,
         layout: &BindGroupLayout,
         texture: &wgpu::Texture,
         extent: Extent3d,
@@ -62,11 +65,15 @@ where
             return None;
         }
 
-        let prim_fusion = tensor
-            .clone()
-            .to_device(burn_device)
-            .into_primitive()
-            .tensor();
+        // Avoid round-tripping through the CPU when the tensor already lives on the render GPU.
+        let target_device = burn_device.deref().clone();
+        let tensor = if tensor.device() == target_device {
+            tensor.clone()
+        } else {
+            tensor.clone().to_device(&target_device)
+        };
+
+        let prim_fusion = tensor.into_primitive().tensor();
         let fusion_client = prim_fusion.client.clone();
         let base =
             fusion_client.resolve_tensor_float::<CubeBackend<WgpuRuntime, F, I, u32>>(prim_fusion);
@@ -78,16 +85,37 @@ where
         let res = client.get_resource(prim2.handle.clone().binding());
         client.flush();
 
-        // src buffer must be 256B-aligned for binding as storage
         let resource = res.resource();
-        let src_off = resource.offset;
-        if src_off & 0xFFu64 != 0 {
-            warn!(target: LOG, "tensor storage offset {} is not 256-aligned; cannot bind.", src_off);
-            return None;
-        }
+        let mut scratch: Option<Buffer> = None;
+        let (src_buffer, src_off): (&wgpu::Buffer, wgpu::BufferAddress) = if resource.offset & 0xFFu64 != 0 {
+            let aligned: Buffer = render_device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("bevy_burn.aligned_tensor"),
+                size: resource.size,
+                usage: BufferUsages::COPY_DST | BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+
+            let mut encoder = render_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("bevy_burn.align_buffer"),
+            });
+            encoder.copy_buffer_to_buffer(
+                &resource.buffer,
+                resource.offset,
+                &aligned,
+                0,
+                resource.size,
+            );
+            render_queue.0.as_ref().submit(std::iter::once(encoder.finish()));
+
+            scratch = Some(aligned);
+            let buffer_ref = scratch.as_ref().unwrap();
+            (&**buffer_ref, 0)
+        } else {
+            (&resource.buffer, resource.offset as wgpu::BufferAddress)
+        };
 
         let src_binding = wgpu::BufferBinding {
-            buffer: &resource.buffer,
+            buffer: src_buffer,
             offset: src_off,
             size: NonZeroU64::new(resource.size),
         };
@@ -118,6 +146,7 @@ where
         Some(CopyBindGroup {
             bg,
             workgroups: [gx, gy, 1],
+            scratch,
         })
     }
 }
@@ -272,6 +301,7 @@ fn queue_copy_bind_groups<B: BurnBackend>(
     mut commands: Commands,
     burn_device: Res<BurnDevice>,
     render_device: Res<RenderDevice>,
+    render_queue: Res<RenderQueue>,
     pipe: Res<Rgba32fPipe>,
     images: Res<RenderAssets<GpuImage>>,
     q_handles: Query<(Entity, &ExtractedGpuHandle<B>)>,
@@ -300,6 +330,7 @@ fn queue_copy_bind_groups<B: BurnBackend>(
             &h.tensor,
             &burn_device,
             &render_device,
+            &render_queue,
             &pipe.bgl,
             &gpu_image.texture,
             extent,

@@ -763,6 +763,7 @@ mod gpu_tests {
             &tensor,
             &ctx.burn_device,
             &ctx.render_device,
+            &ctx.render_queue,
             &layout,
             &*texture,
             extent,
