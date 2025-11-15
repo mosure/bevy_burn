@@ -31,7 +31,7 @@ exclude = [
 
 
 [dependencies]
-burn = { version = "0.19", features = ["wgpu"] }
+burn = { version = "0.19", default-features = false, features = ["std", "wgpu"] }
 burn-core = { version = "0.19" }
 burn-cubecl = { version = "0.19" }
 burn-fusion = { version = "0.19" }
