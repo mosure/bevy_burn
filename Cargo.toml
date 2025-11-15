@@ -31,22 +31,24 @@ exclude = [
 
 
 [dependencies]
-burn = { version = "0.19", default-features = false, features = ["std", "wgpu"] }
 burn-core = { version = "0.19" }
 burn-cubecl = { version = "0.19" }
-burn-fusion = { version = "0.19" }
 bytemuck = "1.23"
 wgpu = "26.0"
 
 
-[dependencies.burn-wgpu]
+[dependencies.burn]
 version = "0.19"
 default-features = false
 features = [
-  "fusion",
   "std",
-  # "template",
+  "webgpu",
 ]
+
+[dependencies.burn-wgpu]
+version = "0.19"
+default-features = false
+features = ["fusion", "std"]
 
 [dependencies.cubecl]
 version = "0.8"

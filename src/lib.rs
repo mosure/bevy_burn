@@ -492,7 +492,7 @@ fn gpu_bevy_to_burn<B: Backend>(
 mod cpu_tests {
     use super::*;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-    use burn_wgpu::Wgpu;
+    use burn::backend::Wgpu;
 
     type BurnBackend = Wgpu<f32, i32>;
 
@@ -618,7 +618,7 @@ mod gpu_tests {
         init_device as init_burn_device, RuntimeOptions as BurnRuntimeOptions,
         WgpuSetup as BurnWgpuSetup,
     };
-    use burn_wgpu::Wgpu as BurnBackend;
+    use burn::backend::Wgpu as BurnBackend;
     use futures::executor::block_on;
     use std::sync::Arc;
     use wgpu::{
