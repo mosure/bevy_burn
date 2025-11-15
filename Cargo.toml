@@ -1,7 +1,7 @@
 [package]
 name = "bevy_burn"
 description = "bevy burn bindings"
-version = "0.4.6"
+version = "0.4.7"
 edition = "2021"
 authors = ["mosure <mitchell@mosure.me>"]
 license = "MIT"
@@ -44,27 +44,38 @@ features = [
   "std",
 ]
 
-[dependencies.burn-wgpu]
+[dependencies.burn-cubecl-fusion]
 version = "0.19"
-default-features = false
-features = ["fusion", "std"]
-
-[dependencies.cubecl]
-version = "0.8"
 default-features = false
 features = [
   "std",
-  # "template",
+  # "std",
 ]
 
-[dependencies.cubecl-runtime]
-version = "0.8"
+[dependencies.burn-wgpu]
+version = "0.19"
 default-features = false
 features = [
+  "fusion",
   # "std",
-  "channel-mpsc",
-  # "template",
 ]
+
+# [dependencies.cubecl]
+# version = "0.8"
+# default-features = false
+# features = [
+#   "std",
+#   # "template",
+# ]
+
+# [dependencies.cubecl-runtime]
+# version = "0.8"
+# default-features = false
+# features = [
+#   # "std",
+#   "channel-mpsc",
+#   # "template",
+# ]
 
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

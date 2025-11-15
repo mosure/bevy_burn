@@ -487,18 +487,17 @@ dependencies = [
 
 [[package]]
 name = "bevy_burn"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "bevy",
  "burn",
  "burn-core",
  "burn-cubecl",
+ "burn-cubecl-fusion",
  "burn-wgpu",
  "bytemuck",
  "console_error_panic_hook",
  "criterion",
- "cubecl",
- "cubecl-runtime",
  "futures",
  "getrandom 0.3.4",
  "wasm-bindgen",
