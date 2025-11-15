@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy::{asset::RenderAssetUsages, render::render_resource::*};
 use bevy_burn::*;
 use burn_core::tensor::{Int, Tensor};
-use burn::backend::Wgpu as BurnWgpu;
+use burn_wgpu::Wgpu as BurnWgpu;
 
 type BB = BurnWgpu<f32, i32>;
 

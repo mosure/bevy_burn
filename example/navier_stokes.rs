@@ -10,7 +10,7 @@ use bevy::{
 };
 use bevy_burn::{BevyBurnBridgePlugin, BevyBurnHandle, BindingDirection, BurnDevice, TransferKind};
 use burn_core::tensor::{backend::Backend, ElementConversion, Int, Tensor};
-use burn::backend::Wgpu;
+use burn_wgpu::Wgpu;
 
 type BurnBackend = Wgpu<f32, i32>;
 

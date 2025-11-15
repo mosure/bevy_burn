@@ -2,7 +2,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Through
 
 use bevy::{asset::RenderAssetUsages, prelude::*, render::render_resource::*};
 use burn::tensor::Tensor;
-use burn::backend::Wgpu;
+use burn_wgpu::Wgpu;
 
 use bevy_burn::{BevyBurnBridgePlugin, BevyBurnHandle, BindingDirection, TransferKind};
 

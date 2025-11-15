@@ -1,7 +1,7 @@
 [package]
 name = "bevy_burn"
 description = "bevy burn bindings"
-version = "0.4.5"
+version = "0.4.6"
 edition = "2021"
 authors = ["mosure <mitchell@mosure.me>"]
 license = "MIT"
@@ -32,7 +32,7 @@ exclude = [
 
 [dependencies]
 burn-core = { version = "0.19" }
-burn-cubecl = { version = "0.19" }
+burn-cubecl = { version = "0.19", default-features = false }
 bytemuck = "1.23"
 wgpu = "26.0"
 
@@ -42,7 +42,6 @@ version = "0.19"
 default-features = false
 features = [
   "std",
-  "webgpu",
 ]
 
 [dependencies.burn-wgpu]

@@ -20,12 +20,12 @@ use bevy::{
 #[cfg(target_family = "wasm")]
 use bevy::tasks::{IoTaskPool, Task};
 use burn::{
-    backend::wgpu::{
-        init_device as init_burn_device, RuntimeOptions as BurnRuntimeOptions,
-        WgpuDevice as BurnWgpuDevice, WgpuSetup as BurnWgpuSetup,
-    },
     prelude::Backend,
     tensor::{Int, Tensor, TensorData},
+};
+use burn_wgpu::{
+    init_device as init_burn_device, RuntimeOptions as BurnRuntimeOptions,
+    WgpuDevice as BurnWgpuDevice, WgpuSetup as BurnWgpuSetup,
 };
 #[cfg(target_family = "wasm")]
 use std::{
@@ -492,7 +492,7 @@ fn gpu_bevy_to_burn<B: Backend>(
 mod cpu_tests {
     use super::*;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-    use burn::backend::Wgpu;
+    use burn_wgpu::Wgpu;
 
     type BurnBackend = Wgpu<f32, i32>;
 
@@ -614,11 +614,11 @@ mod gpu_tests {
             texture::GpuImage,
         },
     };
-    use burn::backend::wgpu::{
+    use burn_wgpu::wgpu::{
         init_device as init_burn_device, RuntimeOptions as BurnRuntimeOptions,
         WgpuSetup as BurnWgpuSetup,
     };
-    use burn::backend::Wgpu as BurnBackend;
+    use burn_wgpu::Wgpu as BurnBackend;
     use futures::executor::block_on;
     use std::sync::Arc;
     use wgpu::{

@@ -18,7 +18,7 @@ use bevy::{
 };
 use burn::tensor::{backend::Backend as BurnBackend, Tensor, TensorPrimitive};
 use burn_cubecl::kernel::into_contiguous_aligned;
-use burn::backend::wgpu::{CubeBackend, FloatElement, IntElement, Wgpu as BurnWgpu, WgpuRuntime};
+use burn_wgpu::{CubeBackend, FloatElement, IntElement, Wgpu as BurnWgpu, WgpuRuntime};
 
 // from your bridge
 use crate::{BindingDirection, BurnDevice, ExtractedGpuHandle};

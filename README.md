@@ -24,7 +24,7 @@ use bevy::{
     render::render_resource::*,
 };
 use burn_core::tensor::Int;
-use burn::backend::Wgpu as BurnWgpu;
+use burn_wgpu::Wgpu as BurnWgpu;
 use bevy_burn::*;
 
 type BB = BurnWgpu<f32, i32>;
