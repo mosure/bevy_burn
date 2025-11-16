@@ -37,8 +37,40 @@ use std::{
 pub mod gpu_burn_to_bevy;
 use gpu_burn_to_bevy::{BurnBevyPrepare, GpuBurnToBevyPlugin};
 
-#[derive(Resource, Deref, DerefMut, Clone, Debug, Hash, PartialEq, Eq)]
-pub struct BurnDevice(BurnWgpuDevice);
+#[derive(Resource, Clone, Debug, Default)]
+pub struct BurnDevice {
+    inner: Option<BurnWgpuDevice>,
+}
+
+impl BurnDevice {
+    pub fn pending() -> Self {
+        Self { inner: None }
+    }
+
+    pub fn ready(device: BurnWgpuDevice) -> Self {
+        Self {
+            inner: Some(device),
+        }
+    }
+
+    pub fn device(&self) -> Option<&BurnWgpuDevice> {
+        self.inner.as_ref()
+    }
+
+    pub fn device_mut(&mut self) -> Option<&mut BurnWgpuDevice> {
+        self.inner.as_mut()
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.inner.is_some()
+    }
+}
+
+impl From<BurnWgpuDevice> for BurnDevice {
+    fn from(value: BurnWgpuDevice) -> Self {
+        Self::ready(value)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BindingDirection {
@@ -138,8 +170,9 @@ where
             burn_device
         };
 
-        render_app.insert_resource(BurnDevice(burn_device.clone()));
-        app.insert_resource(BurnDevice(burn_device));
+        let burn_device = BurnDevice::from(burn_device);
+        render_app.insert_resource(burn_device.clone());
+        app.insert_resource(burn_device);
 
         app.add_plugins(GpuBurnToBevyPlugin::<B>::default());
     }
@@ -663,7 +696,7 @@ mod gpu_tests {
                 backend: adapter_info.backend,
             };
             let burn_device =
-                BurnDevice(init_burn_device(burn_setup, BurnRuntimeOptions::default()));
+                BurnDevice::from(init_burn_device(burn_setup, BurnRuntimeOptions::default()));
 
             Self {
                 render_device,
@@ -757,11 +790,14 @@ mod gpu_tests {
         let (layout, pipeline) = create_rgba_pipeline(&ctx.render_device);
 
         let tensor =
-            Tensor::<BurnBackend, 3>::from_data([[[0.0f32, 0.5, 1.0, 1.0]]], &ctx.burn_device);
+            Tensor::<BurnBackend, 3>::from_data(
+                [[[0.0f32, 0.5, 1.0, 1.0]]],
+                ctx.burn_device.device().expect("burn device ready"),
+            );
 
         let copy = <() as BurnBevyPrepare<BurnBackend>>::prepare_bind_group(
             &tensor,
-            &ctx.burn_device,
+            ctx.burn_device.device().expect("burn device ready"),
             &ctx.render_device,
             &ctx.render_queue,
             &layout,
@@ -889,7 +925,10 @@ mod gpu_tests {
             images.insert(handle.id(), gpu_image);
         }
 
-        let tensor = Tensor::<BurnBackend, 3>::zeros([1, 1, 4], &ctx.burn_device);
+        let tensor = Tensor::<BurnBackend, 3>::zeros(
+            [1, 1, 4],
+            ctx.burn_device.device().expect("burn device ready"),
+        );
         world.spawn(ExtractedGpuHandle::<BurnBackend> {
             image: handle.clone(),
             tensor,

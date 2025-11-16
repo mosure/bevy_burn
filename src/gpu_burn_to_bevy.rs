@@ -1,6 +1,6 @@
 // src/gpu_burn_to_bevy.rs
 
-use std::{borrow::Cow, marker::PhantomData, num::NonZeroU64, ops::Deref};
+use std::{borrow::Cow, marker::PhantomData, num::NonZeroU64};
 
 use bevy::{
     asset::{load_internal_asset, uuid_handle},
@@ -18,7 +18,10 @@ use bevy::{
 };
 use burn::tensor::{backend::Backend as BurnBackend, Tensor, TensorPrimitive};
 use burn_cubecl::kernel::into_contiguous_aligned;
-use burn_wgpu::{CubeBackend, FloatElement, IntElement, Wgpu as BurnWgpu, WgpuRuntime};
+use burn_wgpu::{
+    CubeBackend, FloatElement, IntElement, Wgpu as BurnWgpu, WgpuDevice as BurnWgpuDevice,
+    WgpuRuntime,
+};
 
 // from your bridge
 use crate::{BindingDirection, BurnDevice, ExtractedGpuHandle};
@@ -36,7 +39,7 @@ pub struct CopyBindGroup {
 pub trait BurnBevyPrepare<B: BurnBackend> {
     fn prepare_bind_group(
         tensor: &Tensor<B, 3>,
-        burn_device: &BurnDevice,
+        burn_device: &BurnWgpuDevice,
         render_device: &RenderDevice,
         render_queue: &RenderQueue,
         layout: &BindGroupLayout,
@@ -52,7 +55,7 @@ where
 {
     fn prepare_bind_group(
         tensor: &Tensor<BurnWgpu<F, I>, 3>,
-        burn_device: &BurnDevice,
+        burn_device: &BurnWgpuDevice,
         render_device: &RenderDevice,
         render_queue: &RenderQueue,
         layout: &BindGroupLayout,
@@ -66,7 +69,7 @@ where
         }
 
         // Avoid round-tripping through the CPU when the tensor already lives on the render GPU.
-        let target_device = burn_device.deref().clone();
+        let target_device = burn_device.clone();
         let tensor = if tensor.device() == target_device {
             tensor.clone()
         } else {
@@ -299,7 +302,7 @@ where
 #[allow(clippy::type_complexity)]
 fn queue_copy_bind_groups<B: BurnBackend>(
     mut commands: Commands,
-    burn_device: Res<BurnDevice>,
+        burn_device: Res<BurnDevice>,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
     pipe: Res<Rgba32fPipe>,
@@ -326,15 +329,21 @@ fn queue_copy_bind_groups<B: BurnBackend>(
         };
 
         // produce a bind group targeting the current texture
-        if let Some(bg) = <() as BurnBevyPrepare<B>>::prepare_bind_group(
-            &h.tensor,
-            &burn_device,
-            &render_device,
-            &render_queue,
-            &pipe.bgl,
-            &gpu_image.texture,
-            extent,
-        ) {
+        let Some(device) = burn_device.device() else {
+            continue;
+        };
+
+        if let Some(bg) =
+            <() as BurnBevyPrepare<B>>::prepare_bind_group(
+                &h.tensor,
+                device,
+                &render_device,
+                &render_queue,
+                &pipe.bgl,
+                &gpu_image.texture,
+                extent,
+            )
+        {
             commands.entity(entity).insert(bg);
             trace!(target: LOG, "queue: bind group prepared for entity {:?}", entity);
         } else {

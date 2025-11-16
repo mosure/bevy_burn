@@ -7,10 +7,15 @@ use bevy::{
     image::ImagePlugin,
     prelude::*,
     render::render_resource::*,
+    tasks::{block_on, Task},
 };
+#[cfg(target_arch = "wasm32")]
+use bevy::tasks::futures_lite::future;
+#[cfg(target_arch = "wasm32")]
+use bevy::tasks::AsyncComputeTaskPool;
 use bevy_burn::{BevyBurnBridgePlugin, BevyBurnHandle, BindingDirection, BurnDevice, TransferKind};
 use burn_core::tensor::{backend::Backend, ElementConversion, Int, Tensor};
-use burn_wgpu::Wgpu;
+use burn_wgpu::{Wgpu, WgpuDevice as BurnWgpuDevice};
 
 type BurnBackend = Wgpu<f32, i32>;
 
@@ -29,6 +34,10 @@ const OMEGA: f32 = 1.6;
 const PRESSURE_RES_TOL: f32 = 1e-3;
 const VIZ_TAU_RISE: f32 = 0.15;
 const VIZ_TAU_FALL: f32 = 0.60;
+const MAX_TIME_ACCUM: f32 = 0.25;
+const FIXED_DT: f32 = 1.0 / 240.0;
+const MAX_SUBSTEPS_PER_FRAME: usize = 8;
+const CFL_RECOMP_INTERVAL: usize = 4;
 
 fn velocity_to_rgba<B: Backend>(v: &Tensor<B, 4>, scale: f32, device: &B::Device) -> Tensor<B, 3> {
     let vx = v
@@ -99,10 +108,10 @@ fn velocity_point_source<B: Backend>(grid_like: &Tensor<B, 4>, device: &B::Devic
     Tensor::cat(vec![zero, gaussian], 1)
 }
 
-/// * `v`   – velocity field `[b, 2, h, w]`
-/// * `nu`  – kinematic viscosity
-/// * `dt`  – time step
-fn navier_stokes<B: Backend>(
+/// * `v`   - velocity field `[b, 2, h, w]`
+/// * `nu`  - kinematic viscosity
+/// * `dt`  - time step
+async fn navier_stokes<B: Backend>(
     v: Tensor<B, 4>,
     nu: f32,
     dt: f32,
@@ -143,7 +152,12 @@ fn navier_stokes<B: Backend>(
         // residual r = Laplace(p) - rhs = (sum_nb - 4p) - rhs
         let lap = neigh_sum(&p) - p.clone() * 4.0;
         let r = lap - rhs.clone();
-        let r_max = r.abs().max().into_scalar().elem::<f32>();
+        let r_max = r
+            .abs()
+            .max()
+            .into_scalar_async()
+            .await
+            .elem::<f32>();
         if r_max <= tol {
             break;
         }
@@ -361,8 +375,12 @@ fn diffuse<B: Backend>(v: Tensor<B, 4>, nu: f32, dt: f32) -> Tensor<B, 4> {
     x
 }
 
-#[derive(Resource)]
+#[derive(Default, Resource)]
 struct NavierStokesState<B: Backend> {
+    data: Option<NavierStokesData<B>>,
+}
+
+struct NavierStokesData<B: Backend> {
     velocity: Tensor<B, 4>,
     xs: Tensor<B, 4>,
     ys: Tensor<B, 4>,
@@ -372,13 +390,7 @@ struct NavierStokesState<B: Backend> {
     time_accum: f32,
 }
 
-impl Default for NavierStokesState<BurnBackend> {
-    fn default() -> Self {
-        NavierStokesState::new(&Default::default())
-    }
-}
-
-impl<B: Backend> NavierStokesState<B> {
+impl<B: Backend> NavierStokesData<B> {
     fn new(device: &B::Device) -> Self {
         let velocity = Tensor::<B, 4>::zeros([1, 2, SIZE as usize, SIZE as usize], device);
 
@@ -394,7 +406,7 @@ impl<B: Backend> NavierStokesState<B> {
         let mask_black =
             colour_mask::<B>(SIZE as usize, SIZE as usize, false, device).repeat(&[1, 1, 1, 1]);
 
-        NavierStokesState {
+        NavierStokesData {
             velocity,
             xs,
             ys,
@@ -406,26 +418,131 @@ impl<B: Backend> NavierStokesState<B> {
     }
 }
 
+impl<B: Backend> NavierStokesState<B> {
+    fn ensure_initialized(&mut self, device: &B::Device) {
+        if self.data.is_none() {
+            self.data = Some(NavierStokesData::new(device));
+        }
+    }
+}
+
+struct NavierStokesJobInput<B: Backend> {
+    velocity: Tensor<B, 4>,
+    xs: Tensor<B, 4>,
+    ys: Tensor<B, 4>,
+    mask_red: Tensor<B, 4>,
+    mask_black: Tensor<B, 4>,
+    viz_scale: f32,
+    time_accum: f32,
+    frame_dt: f32,
+    device: B::Device,
+}
+
+struct NavierStokesJobResult<B: Backend> {
+    velocity: Tensor<B, 4>,
+    viz_scale: f32,
+    time_accum: f32,
+    rgba: Tensor<B, 3>,
+}
+
+async fn run_navier_stokes_job<B: Backend>(
+    input: NavierStokesJobInput<B>,
+) -> NavierStokesJobResult<B> {
+    let device = &input.device;
+    let mut velocity = input.velocity;
+    let mut time_accum = (input.time_accum + input.frame_dt).min(MAX_TIME_ACCUM);
+    let mut substeps: usize = 0;
+
+    let uu = velocity.clone().slice_dim(1, 0..1);
+    let vv = velocity.clone().slice_dim(1, 1..2);
+    let mut vmax = (uu.clone().powf_scalar(2.) + vv.clone().powf_scalar(2.))
+        .sqrt()
+        .max()
+        .into_scalar_async()
+        .await
+        .elem::<f32>()
+        .max(1e-3);
+
+    let mut safe_dt = (CFL / vmax).min(MAX_DT);
+    let mut dt = FIXED_DT.min(safe_dt).max(1e-6);
+
+    while time_accum >= dt && substeps < MAX_SUBSTEPS_PER_FRAME {
+        velocity = navier_stokes(
+            velocity.clone(),
+            VISCOSITY,
+            dt,
+            &input.xs,
+            &input.ys,
+            &input.mask_red,
+            &input.mask_black,
+            device,
+        )
+        .await;
+
+        time_accum -= dt;
+        substeps += 1;
+
+        if substeps % CFL_RECOMP_INTERVAL == 0 {
+            let u2 = velocity.clone().slice_dim(1, 0..1);
+            let v2 = velocity.clone().slice_dim(1, 1..2);
+            vmax = (u2.clone().powf_scalar(2.) + v2.clone().powf_scalar(2.))
+                .sqrt()
+                .max()
+                .into_scalar_async()
+                .await
+                .elem::<f32>()
+                .max(1e-3);
+            safe_dt = (CFL / vmax).min(MAX_DT);
+            dt = FIXED_DT.min(safe_dt).max(1e-6);
+        }
+    }
+
+    let u = velocity.clone().slice_dim(1, 0..1);
+    let v = velocity.clone().slice_dim(1, 1..2);
+    let mag_max = (u.clone().powf_scalar(2.) + v.clone().powf_scalar(2.))
+        .sqrt()
+        .max()
+        .into_scalar_async()
+        .await
+        .elem::<f32>();
+
+    let eps = 1e-3f32;
+    let current = input.viz_scale.max(eps);
+    let target = mag_max.max(eps);
+    let alpha_up = 1.0 - (-input.frame_dt / VIZ_TAU_RISE).exp();
+    let alpha_down = 1.0 - (-input.frame_dt / VIZ_TAU_FALL).exp();
+    let viz_scale = if target > current {
+        current * (1.0 - alpha_up) + target * alpha_up
+    } else {
+        current * (1.0 - alpha_down) + target * alpha_down
+    };
+
+    let rgba = velocity_to_rgba(&velocity, viz_scale, device);
+
+    NavierStokesJobResult {
+        velocity,
+        viz_scale,
+        time_accum,
+        rgba,
+    }
+}
+
 fn setup(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut ns: ResMut<NavierStokesState<BurnBackend>>,
     burn_device: Res<BurnDevice>,
 ) {
-    let dev = &*burn_device;
+    let Some(dev) = burn_device.device() else {
+        return;
+    };
 
-    *ns = NavierStokesState::<BurnBackend>::new(dev);
+    ns.ensure_initialized(dev);
+    let Some(ns) = ns.data.as_mut() else {
+        return;
+    };
 
     ns.velocity = ns.velocity.clone() + velocity_point_source::<BurnBackend>(&ns.velocity, dev);
-    // initialize viz scale based on current field
-    let u0 = ns.velocity.clone().slice_dim(1, 0..1);
-    let v0 = ns.velocity.clone().slice_dim(1, 1..2);
-    let mag_max0 = (u0.clone().powf_scalar(2.) + v0.clone().powf_scalar(2.))
-        .sqrt()
-        .max()
-        .into_scalar()
-        .elem::<f32>();
-    ns.viz_scale = mag_max0.max(1e-3);
     let rgba = velocity_to_rgba(&ns.velocity, ns.viz_scale, dev);
 
     let size = Extent3d {
@@ -464,95 +581,6 @@ fn setup(
         },
         ImageNode::new(bevy_image),
     ));
-}
-
-fn update_tensor(
-    time: Res<Time>,
-    mut handles: Query<&mut BevyBurnHandle<BurnBackend>>,
-    mut ns: ResMut<NavierStokesState<BurnBackend>>,
-    burn_device: Res<BurnDevice>,
-) {
-    let device = &*burn_device;
-
-    for mut handle in handles.iter_mut() {
-        // ns.velocity = ns.velocity.clone() + velocity_point_source::<B>(&ns.velocity);
-        let frame_dt = time.delta_secs();
-
-        // Accumulate time and step the simulation with a fixed dt, respecting CFL.
-        ns.time_accum = (ns.time_accum + frame_dt).min(0.25);
-        let mut substeps: usize = 0;
-
-        // local knobs to avoid excessive substeps and reduce CFL recomputes
-        let fixed_dt: f32 = 1.0 / 240.0;
-        let max_substeps_per_frame: usize = 8;
-        let cfl_recomp_interval: usize = 4;
-
-        // Compute CFL once, then throttle recomputation to reduce overhead.
-        let uu = ns.velocity.clone().slice_dim(1, 0..1);
-        let vv = ns.velocity.clone().slice_dim(1, 1..2);
-        let mut vmax = (uu.clone().powf_scalar(2.) + vv.clone().powf_scalar(2.))
-            .sqrt()
-            .max()
-            .into_scalar()
-            .elem::<f32>()
-            .max(1e-3);
-
-        let mut safe_dt = (CFL / vmax).min(MAX_DT);
-        let mut dt = fixed_dt.min(safe_dt).max(1e-6);
-
-        while ns.time_accum >= dt && substeps < max_substeps_per_frame {
-            ns.velocity = navier_stokes(
-                ns.velocity.clone(),
-                VISCOSITY,
-                dt,
-                &ns.xs,
-                &ns.ys,
-                &ns.mask_red,
-                &ns.mask_black,
-                device,
-            );
-
-            ns.time_accum -= dt;
-            substeps += 1;
-
-            if substeps % cfl_recomp_interval == 0 {
-                let u2 = ns.velocity.clone().slice_dim(1, 0..1);
-                let v2 = ns.velocity.clone().slice_dim(1, 1..2);
-                vmax = (u2.clone().powf_scalar(2.) + v2.clone().powf_scalar(2.))
-                    .sqrt()
-                    .max()
-                    .into_scalar()
-                    .elem::<f32>()
-                    .max(1e-3);
-                safe_dt = (CFL / vmax).min(MAX_DT);
-                dt = fixed_dt.min(safe_dt).max(1e-6);
-            }
-        }
-
-        // smooth the visualization scale to reduce flicker (rate-limited EMA)
-        let u = ns.velocity.clone().slice_dim(1, 0..1);
-        let v = ns.velocity.clone().slice_dim(1, 1..2);
-        let mag_max = (u.clone().powf_scalar(2.) + v.clone().powf_scalar(2.))
-            .sqrt()
-            .max()
-            .into_scalar()
-            .elem::<f32>();
-
-        let eps = 1e-3f32;
-        let current = ns.viz_scale.max(eps);
-        let target = mag_max.max(eps);
-        let alpha_up = 1.0 - (-frame_dt / VIZ_TAU_RISE).exp();
-        let alpha_down = 1.0 - (-frame_dt / VIZ_TAU_FALL).exp();
-        ns.viz_scale = if target > current {
-            current * (1.0 - alpha_up) + target * alpha_up
-        } else {
-            current * (1.0 - alpha_down) + target * alpha_down
-        };
-        let rgba = velocity_to_rgba(&ns.velocity, ns.viz_scale, device);
-
-        handle.tensor = rgba;
-        handle.upload = true;
-    }
 }
 
 fn fps_display_setup(mut commands: Commands, asset_server: Res<AssetServer>) {
@@ -612,4 +640,81 @@ fn main() {
         .add_systems(Startup, (fps_display_setup, setup))
         .add_systems(Update, (fps_update_system, update_tensor))
         .run();
+}
+fn update_tensor(
+    time: Res<Time>,
+    mut handles: Query<&mut BevyBurnHandle<BurnBackend>>,
+    mut ns: ResMut<NavierStokesState<BurnBackend>>,
+    burn_device: Res<BurnDevice>,
+    mut pending: Local<Option<Task<NavierStokesJobResult<BurnBackend>>>>,
+) {
+    let Some(device) = burn_device.device() else {
+        return;
+    };
+    let mut handle = match handles.iter_mut().next() {
+        Some(handle) => handle,
+        None => return,
+    };
+
+    ns.ensure_initialized(device);
+    let Some(ns) = ns.data.as_mut() else {
+        return;
+    };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        pending.take();
+        let input = build_job_input(ns, device, time.delta_secs());
+        let result = block_on(run_navier_stokes_job(input));
+        apply_job_result(result, ns, &mut handle);
+        return;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(task) = pending.as_mut() {
+            if let Some(result) = block_on(future::poll_once(task)) {
+                apply_job_result(result, ns, &mut handle);
+                *pending = None;
+            }
+        }
+
+        if pending.is_some() {
+            return;
+        }
+
+        let input = build_job_input(ns, device, time.delta_secs());
+        let pool = AsyncComputeTaskPool::get();
+        *pending = Some(pool.spawn(run_navier_stokes_job(input)));
+    }
+}
+
+fn build_job_input(
+    ns: &NavierStokesData<BurnBackend>,
+    device: &BurnWgpuDevice,
+    frame_dt: f32,
+) -> NavierStokesJobInput<BurnBackend> {
+    NavierStokesJobInput {
+        velocity: ns.velocity.clone(),
+        xs: ns.xs.clone(),
+        ys: ns.ys.clone(),
+        mask_red: ns.mask_red.clone(),
+        mask_black: ns.mask_black.clone(),
+        viz_scale: ns.viz_scale,
+        time_accum: ns.time_accum,
+        frame_dt,
+        device: device.clone(),
+    }
+}
+
+fn apply_job_result(
+    result: NavierStokesJobResult<BurnBackend>,
+    ns: &mut NavierStokesData<BurnBackend>,
+    handle: &mut BevyBurnHandle<BurnBackend>,
+) {
+    ns.velocity = result.velocity;
+    ns.viz_scale = result.viz_scale;
+    ns.time_accum = result.time_accum;
+    handle.tensor = result.rgba;
+    handle.upload = true;
 }

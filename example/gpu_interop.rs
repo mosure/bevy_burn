@@ -27,6 +27,9 @@ struct Plasma {
 }
 
 fn setup(mut cmds: Commands, mut images: ResMut<Assets<Image>>, burn: Res<BurnDevice>) {
+    let Some(dev) = burn.device() else {
+        return;
+    };
     let size = Extent3d {
         width: SIZE,
         height: SIZE,
@@ -47,23 +50,21 @@ fn setup(mut cmds: Commands, mut images: ResMut<Assets<Image>>, burn: Res<BurnDe
 
     let h = size.height as usize;
     let w = size.width as usize;
-    let dev = &*burn;
-
-    let xs = Tensor::<BB, 1, Int>::arange(0..w as i64, &dev)
+    let xs = Tensor::<BB, 1, Int>::arange(0..w as i64, dev)
         .float()
         .div_scalar((w - 1) as f32)
         .mul_scalar(2.0)
         .add_scalar(-1.0)
         .reshape([1, w]); // [1, w]
-    let ys = Tensor::<BB, 1, Int>::arange(0..h as i64, &dev)
+    let ys = Tensor::<BB, 1, Int>::arange(0..h as i64, dev)
         .float()
         .div_scalar((h - 1) as f32)
         .mul_scalar(2.0)
         .add_scalar(-1.0)
         .reshape([h, 1]); // [h, 1]
-    let x = Tensor::<BB, 2>::zeros([h, 1], &dev) + xs; // [h, w]
-    let y = ys + Tensor::<BB, 2>::zeros([1, w], &dev); // [h, w]
-    let a1 = Tensor::<BB, 2>::ones([h, w], &dev);
+    let x = Tensor::<BB, 2>::zeros([h, 1], dev) + xs; // [h, w]
+    let y = ys + Tensor::<BB, 2>::zeros([1, w], dev); // [h, w]
+    let a1 = Tensor::<BB, 2>::ones([h, w], dev);
     let boot_r = x
         .clone()
         .mul_scalar(8.0)
