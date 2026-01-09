@@ -659,6 +659,13 @@ mod gpu_tests {
         Features, MapMode, PipelineCompilationOptions, PollType, PowerPreference,
         RequestAdapterOptions,
     };
+
+    type GpuExtractState<'w, 's> = SystemState<(
+        Res<'w, RenderDevice>,
+        Res<'w, RenderQueue>,
+        Res<'w, RenderAssets<GpuImage>>,
+        Query<'w, 's, &'w mut ExtractedGpuHandle<BurnBackend>>,
+    )>;
     struct TestGpuContext {
         render_device: RenderDevice,
         render_queue: RenderQueue,
@@ -801,7 +808,7 @@ mod gpu_tests {
             &ctx.render_device,
             &ctx.render_queue,
             &layout,
-            &*texture,
+            &texture,
             extent,
         )
         .expect("bind group");
@@ -875,6 +882,138 @@ mod gpu_tests {
 
     #[test]
     #[ignore = "gpu-dependent; run with `cargo test -- --ignored`"]
+    fn burn_to_bevy_gpu_non_aligned_extent() {
+        let ctx = TestGpuContext::new();
+        let extent = Extent3d {
+            width: 19,
+            height: 7,
+            depth_or_array_layers: 1,
+        };
+        let texture = ctx.render_device.create_texture(&TextureDescriptor {
+            label: Some("burn_to_bevy_texture_non_aligned"),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba32Float,
+            usage: TextureUsages::STORAGE_BINDING
+                | TextureUsages::COPY_SRC
+                | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        let (layout, pipeline) = create_rgba_pipeline(&ctx.render_device);
+
+        let mut values = Vec::with_capacity((extent.width * extent.height * 4) as usize);
+        for y in 0..extent.height {
+            for x in 0..extent.width {
+                let r = (y * extent.width + x) as f32 / (extent.width * extent.height) as f32;
+                let g = x as f32 / extent.width as f32;
+                let b = y as f32 / extent.height as f32;
+                values.extend_from_slice(&[r, g, b, 1.0]);
+            }
+        }
+        let expected = values.clone();
+        let data = TensorData::new(
+            values,
+            [extent.height as usize, extent.width as usize, 4],
+        );
+        let tensor = Tensor::<BurnBackend, 3>::from_data(
+            data,
+            ctx.burn_device.device().expect("burn device ready"),
+        );
+
+        let copy = <() as BurnBevyPrepare<BurnBackend>>::prepare_bind_group(
+            &tensor,
+            ctx.burn_device.device().expect("burn device ready"),
+            &ctx.render_device,
+            &ctx.render_queue,
+            &layout,
+            &texture,
+            extent,
+        )
+        .expect("bind group");
+
+        let mut encoder = ctx
+            .render_device
+            .create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("burn_to_bevy_encoder_non_aligned"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("burn_to_bevy_pass_non_aligned"),
+                ..Default::default()
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &copy.bg, &[]);
+            pass.dispatch_workgroups(copy.workgroups[0], copy.workgroups[1], copy.workgroups[2]);
+        }
+        ctx.render_queue.submit([encoder.finish()]);
+
+        let row_bytes = extent.width * 16;
+        let padded_row = padded_bytes_per_row(extent.width, 16);
+        let total_bytes = padded_row as u64 * extent.height as u64;
+
+        let readback = ctx.render_device.create_buffer(&BufferDescriptor {
+            label: Some("burn_to_bevy_readback_non_aligned"),
+            size: total_bytes,
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = ctx
+            .render_device
+            .create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("burn_to_bevy_copy_encoder_non_aligned"),
+            });
+        encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_row),
+                    rows_per_image: Some(extent.height),
+                },
+            },
+            extent,
+        );
+        ctx.render_queue.submit([encoder.finish()]);
+
+        let slice = readback.slice(..total_bytes);
+        slice.map_async(MapMode::Read, |_| {});
+        ctx.poll_wait();
+        let data = slice.get_mapped_range();
+        let mut actual = Vec::with_capacity(expected.len());
+        for y in 0..extent.height as usize {
+            let src_off = y * padded_row as usize;
+            let row = &data[src_off..src_off + row_bytes as usize];
+            let row_floats: &[f32] = bytemuck::cast_slice(row);
+            actual.extend_from_slice(row_floats);
+        }
+        drop(data);
+        readback.unmap();
+
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "unexpected readback length"
+        );
+        let max_err = actual
+            .iter()
+            .zip(expected.iter())
+            .map(|(a, b)| (*a - *b).abs())
+            .fold(0.0, f32::max);
+        assert!(max_err < 0.001, "non-aligned gpu write mismatch");
+    }
+
+    #[test]
+    #[ignore = "gpu-dependent; run with `cargo test -- --ignored`"]
     fn bevy_to_burn_gpu_1x1() {
         let ctx = TestGpuContext::new();
         let extent = Extent3d {
@@ -935,12 +1074,7 @@ mod gpu_tests {
             direction: BindingDirection::BevyToBurn,
             upload: true,
         });
-        let mut system_state: SystemState<(
-            Res<RenderDevice>,
-            Res<RenderQueue>,
-            Res<RenderAssets<GpuImage>>,
-            Query<&mut ExtractedGpuHandle<BurnBackend>>,
-        )> = SystemState::new(&mut world);
+        let mut system_state: GpuExtractState<'_, '_> = SystemState::new(&mut world);
         {
             let (render_device, render_queue, images, query) = system_state.get_mut(&mut world);
             gpu_bevy_to_burn::<BurnBackend>(render_device, render_queue, images, query);

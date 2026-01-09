@@ -17,7 +17,7 @@ use bevy::{
     },
 };
 use burn::tensor::{backend::Backend as BurnBackend, Tensor, TensorPrimitive};
-use burn_cubecl::kernel::into_contiguous_aligned;
+use burn_cubecl::kernel::into_contiguous;
 use burn_wgpu::{
     CubeBackend, FloatElement, IntElement, Wgpu as BurnWgpu, WgpuDevice as BurnWgpuDevice,
     WgpuRuntime,
@@ -83,7 +83,8 @@ where
         let base_img: Tensor<CubeBackend<WgpuRuntime, F, I, u32>, 3> =
             Tensor::from_primitive(TensorPrimitive::Float(base));
         let prim2 = base_img.into_primitive().tensor();
-        let prim2 = into_contiguous_aligned(prim2);
+        // Shader indexes rows as y * width + x; keep rows tightly packed.
+        let prim2 = into_contiguous(prim2);
         let client = &prim2.client;
         let res = client.get_resource(prim2.handle.clone().binding());
         client.flush();

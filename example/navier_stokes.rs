@@ -111,6 +111,7 @@ fn velocity_point_source<B: Backend>(grid_like: &Tensor<B, 4>, device: &B::Devic
 /// * `v`   - velocity field `[b, 2, h, w]`
 /// * `nu`  - kinematic viscosity
 /// * `dt`  - time step
+#[allow(clippy::too_many_arguments)]
 async fn navier_stokes<B: Backend>(
     v: Tensor<B, 4>,
     nu: f32,
@@ -138,7 +139,7 @@ async fn navier_stokes<B: Backend>(
     let rhs = div.clone() / dt;
 
     let scaled = ((PRESSURE_ITERS as f32) * (dt / MAX_DT).clamp(0.5, 1.0)).ceil() as usize;
-    let iters = scaled.max(2).min(PRESSURE_ITERS);
+    let iters = scaled.clamp(2, PRESSURE_ITERS);
     let tol = PRESSURE_RES_TOL;
     for _ in 0..iters {
         let sum_nb = neigh_sum(&p) * mask_red.clone();
@@ -482,7 +483,7 @@ async fn run_navier_stokes_job<B: Backend>(
         time_accum -= dt;
         substeps += 1;
 
-        if substeps % CFL_RECOMP_INTERVAL == 0 {
+        if substeps.is_multiple_of(CFL_RECOMP_INTERVAL) {
             let u2 = velocity.clone().slice_dim(1, 0..1);
             let v2 = velocity.clone().slice_dim(1, 1..2);
             vmax = (u2.clone().powf_scalar(2.) + v2.clone().powf_scalar(2.))
@@ -571,7 +572,7 @@ fn setup(
         xfer: TransferKind::Gpu,
     });
 
-    commands.spawn(Camera2d::default());
+    commands.spawn(Camera2d);
 
     commands.spawn((
         Node {
@@ -667,7 +668,6 @@ fn update_tensor(
         let input = build_job_input(ns, device, time.delta_secs());
         let result = block_on(run_navier_stokes_job(input));
         apply_job_result(result, ns, &mut handle);
-        return;
     }
 
     #[cfg(target_arch = "wasm32")]
