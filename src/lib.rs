@@ -316,7 +316,7 @@ fn write_tensor_bytes_to_image<B: Backend>(
 #[cfg(target_family = "wasm")]
 #[derive(Component)]
 struct PendingTensorDownload {
-    task: Task<TensorData>,
+    task: Task<Option<TensorData>>,
 }
 
 #[cfg(target_family = "wasm")]
@@ -349,16 +349,19 @@ fn burn_to_bevy_update<B: Backend>(
         if let Some(mut pending_task) = pending {
             if let Some(data) = poll_task(&mut pending_task.task) {
                 commands.entity(entity).remove::<PendingTensorDownload>();
-                if let Some(bytes) = tensor_data_to_rgba_bytes(&data) {
-                    write_tensor_bytes_to_image(&mut handle, &mut images, bytes);
-                    handle.upload = false;
+                if let Some(data) = data {
+                    if let Some(bytes) = tensor_data_to_rgba_bytes(&data) {
+                        write_tensor_bytes_to_image(&mut handle, &mut images, bytes);
+                    }
                 }
+                handle.upload = false;
             }
             continue;
         }
 
         let tensor = handle.tensor.clone();
-        let task = IoTaskPool::get().spawn_local(async move { tensor.into_data_async().await });
+        let task =
+            IoTaskPool::get().spawn_local(async move { tensor.into_data_async().await.ok() });
         commands
             .entity(entity)
             .insert(PendingTensorDownload { task });
