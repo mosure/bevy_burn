@@ -2,6 +2,8 @@
 
 use std::marker::PhantomData;
 
+#[cfg(target_family = "wasm")]
+use bevy::tasks::{IoTaskPool, Task};
 use bevy::{
     asset::{Handle, RenderAssetUsages},
     prelude::*,
@@ -17,8 +19,6 @@ use bevy::{
         Extract, ExtractSchedule, Render, RenderApp, RenderSystems,
     },
 };
-#[cfg(target_family = "wasm")]
-use bevy::tasks::{IoTaskPool, Task};
 use burn::{
     prelude::Backend,
     tensor::{Int, Tensor, TensorData},
@@ -264,10 +264,12 @@ fn write_tensor_bytes_to_image<B: Backend>(
     images: &mut ResMut<Assets<Image>>,
     bytes: Vec<u8>,
 ) {
-    let height = handle.tensor.shape().dims[0] as u32;
-    let width = handle.tensor.shape().dims[1] as u32;
+    let shape = handle.tensor.shape();
+    let dims: [usize; 3] = shape.dims();
+    let height = dims[0] as u32;
+    let width = dims[1] as u32;
 
-    if let Some(img) = images.get_mut(&handle.bevy_image) {
+    if let Some(mut img) = images.get_mut(&handle.bevy_image) {
         if img.height() != height || img.width() != width {
             info!(
                 "resizing image from {}x{} to {}x{}",
@@ -294,20 +296,21 @@ fn write_tensor_bytes_to_image<B: Backend>(
             }
             None => img.data = Some(bytes),
         }
-    } else {
-        let img = Image::new_fill(
-            Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            TextureDimension::D2,
-            &bytes,
-            TextureFormat::Rgba8UnormSrgb,
-            RenderAssetUsages::default(),
-        );
-        handle.bevy_image = images.add(img);
+        return;
     }
+
+    let img = Image::new_fill(
+        Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        &bytes,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    );
+    handle.bevy_image = images.add(img);
 }
 
 #[cfg(target_family = "wasm")]
@@ -320,34 +323,32 @@ struct PendingTensorDownload {
 fn burn_to_bevy_update<B: Backend>(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
-    mut q: Query<(Entity, &mut BevyBurnHandle<B>, Option<&mut PendingTensorDownload>)>,
+    mut q: Query<(
+        Entity,
+        &mut BevyBurnHandle<B>,
+        Option<&mut PendingTensorDownload>,
+    )>,
 ) {
     for (entity, mut handle, pending) in &mut q {
-        let is_cpu_download = handle.direction == BindingDirection::BurnToBevy
-            && handle.xfer == TransferKind::Cpu;
+        let is_cpu_download =
+            handle.direction == BindingDirection::BurnToBevy && handle.xfer == TransferKind::Cpu;
         if !is_cpu_download {
             if pending.is_some() {
-                commands
-                    .entity(entity)
-                    .remove::<PendingTensorDownload>();
+                commands.entity(entity).remove::<PendingTensorDownload>();
             }
             continue;
         }
 
         if !handle.upload {
             if pending.is_some() {
-                commands
-                    .entity(entity)
-                    .remove::<PendingTensorDownload>();
+                commands.entity(entity).remove::<PendingTensorDownload>();
             }
             continue;
         }
 
         if let Some(mut pending_task) = pending {
             if let Some(data) = poll_task(&mut pending_task.task) {
-                commands
-                    .entity(entity)
-                    .remove::<PendingTensorDownload>();
+                commands.entity(entity).remove::<PendingTensorDownload>();
                 if let Some(bytes) = tensor_data_to_rgba_bytes(&data) {
                     write_tensor_bytes_to_image(&mut handle, &mut images, bytes);
                     handle.upload = false;
@@ -456,8 +457,8 @@ fn gpu_bevy_to_burn<B: Backend>(
 
         let bpp = 4u32; // RGBA8
         let extent = Extent3d {
-            width: gpu_image.size.width,
-            height: gpu_image.size.height,
+            width: gpu_image.texture_descriptor.size.width,
+            height: gpu_image.texture_descriptor.size.height,
             depth_or_array_layers: 1,
         };
         let row_bytes = extent.width * bpp;
@@ -497,7 +498,9 @@ fn gpu_bevy_to_burn<B: Backend>(
 
         // map & normalize to tensor
         staging.slice(..).map_async(MapMode::Read, |_| {});
-        let _ = render_device.wgpu_device().poll(PollType::Wait);
+        let _ = render_device
+            .wgpu_device()
+            .poll(PollType::wait_indefinitely());
 
         let view = staging.slice(..).get_mapped_range();
         // strip row padding
@@ -647,11 +650,11 @@ mod gpu_tests {
             texture::GpuImage,
         },
     };
+    use burn_wgpu::Wgpu as BurnBackend;
     use burn_wgpu::{
         init_device as init_burn_device, RuntimeOptions as BurnRuntimeOptions,
         WgpuSetup as BurnWgpuSetup,
     };
-    use burn_wgpu::Wgpu as BurnBackend;
     use futures::executor::block_on;
     use std::sync::Arc;
     use wgpu::{
@@ -675,7 +678,8 @@ mod gpu_tests {
 
     impl TestGpuContext {
         fn new() -> Self {
-            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
             let adapter = block_on(instance.request_adapter(&RequestAdapterOptions {
                 power_preference: PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
@@ -687,6 +691,7 @@ mod gpu_tests {
                 label: Some("bevy_burn_test_device"),
                 required_features: Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
                 required_limits: wgpu::Limits::default(),
+                experimental_features: wgpu::ExperimentalFeatures::default(),
                 memory_hints: Default::default(),
                 trace: Default::default(),
             }))
@@ -714,7 +719,7 @@ mod gpu_tests {
         }
 
         fn poll_wait(&self) {
-            let _ = self.device.poll(PollType::Wait);
+            let _ = self.device.poll(PollType::wait_indefinitely());
         }
     }
 
@@ -754,8 +759,8 @@ mod gpu_tests {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("buffer_to_rgba32f layout"),
-            bind_group_layouts: &[layout.value()],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(layout.value())],
+            immediate_size: 0,
         });
 
         let pipeline = ComputePipeline::from(device.wgpu_device().create_compute_pipeline(
@@ -796,11 +801,10 @@ mod gpu_tests {
 
         let (layout, pipeline) = create_rgba_pipeline(&ctx.render_device);
 
-        let tensor =
-            Tensor::<BurnBackend, 3>::from_data(
-                [[[0.0f32, 0.5, 1.0, 1.0]]],
-                ctx.burn_device.device().expect("burn device ready"),
-            );
+        let tensor = Tensor::<BurnBackend, 3>::from_data(
+            [[[0.0f32, 0.5, 1.0, 1.0]]],
+            ctx.burn_device.device().expect("burn device ready"),
+        );
 
         let copy = <() as BurnBevyPrepare<BurnBackend>>::prepare_bind_group(
             &tensor,
@@ -914,10 +918,7 @@ mod gpu_tests {
             }
         }
         let expected = values.clone();
-        let data = TensorData::new(
-            values,
-            [extent.height as usize, extent.width as usize, 4],
-        );
+        let data = TensorData::new(values, [extent.height as usize, extent.width as usize, 4]);
         let tensor = Tensor::<BurnBackend, 3>::from_data(
             data,
             ctx.burn_device.device().expect("burn device ready"),
@@ -999,11 +1000,7 @@ mod gpu_tests {
         drop(data);
         readback.unmap();
 
-        assert_eq!(
-            actual.len(),
-            expected.len(),
-            "unexpected readback length"
-        );
+        assert_eq!(actual.len(), expected.len(), "unexpected readback length");
         let max_err = actual
             .iter()
             .zip(expected.iter())
@@ -1047,10 +1044,21 @@ mod gpu_tests {
         let gpu_image = GpuImage {
             texture: texture.clone(),
             texture_view,
-            texture_format: TextureFormat::Rgba8UnormSrgb,
             sampler,
-            size: extent,
-            mip_level_count: 1,
+            texture_descriptor: TextureDescriptor {
+                label: Some("bevy_to_burn_texture"),
+                size: extent,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba8UnormSrgb,
+                usage: TextureUsages::COPY_SRC
+                    | TextureUsages::COPY_DST
+                    | TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            texture_view_descriptor: None,
+            had_data: true,
         };
 
         let mut world = World::new();
@@ -1076,7 +1084,8 @@ mod gpu_tests {
         });
         let mut system_state: GpuExtractState<'_, '_> = SystemState::new(&mut world);
         {
-            let (render_device, render_queue, images, query) = system_state.get_mut(&mut world);
+            let (render_device, render_queue, images, query) =
+                system_state.get_mut(&mut world).expect("gpu extract state");
             gpu_bevy_to_burn::<BurnBackend>(render_device, render_queue, images, query);
         }
         system_state.apply(&mut world);

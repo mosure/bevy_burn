@@ -31,21 +31,21 @@ exclude = [
 
 
 [dependencies]
-burn-core = { version = "0.19" }
-burn-cubecl = { version = "0.19", default-features = false }
+burn-core = { version = "0.21" }
+burn-cubecl = { version = "0.21", default-features = false }
 bytemuck = "1.23"
-wgpu = "26.0"
+wgpu = "29.0"
 
 
 [dependencies.burn]
-version = "0.19"
+version = "0.21"
 default-features = false
 features = [
   "std",
 ]
 
 [dependencies.burn-cubecl-fusion]
-version = "0.19"
+version = "0.21"
 default-features = false
 features = [
   "std",
@@ -53,7 +53,7 @@ features = [
 ]
 
 [dependencies.burn-wgpu]
-version = "0.19"
+version = "0.21"
 default-features = false
 features = [
   "fusion",
@@ -85,7 +85,8 @@ wasm-bindgen = "0.2"
 
 
 [dependencies.bevy]
-version = "0.17"
+git = "https://github.com/bevyengine/bevy"
+rev = "ae2fcc0353d95e887470f0f6fc8a7e434e5549ce"
 default-features = false
 features = [
   "bevy_asset",
