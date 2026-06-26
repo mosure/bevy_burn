@@ -15,7 +15,7 @@ bevy burn data bridge plugin
 
 ### burn -> bevy gpu example
 
-`cargo run --bin gpu_interop`
+`cargo run --example gpu_interop`
 
 ```rust
 use bevy::prelude::*;
@@ -90,6 +90,7 @@ fn setup(
 
 | `bevy_burn` | `bevy`  | `burn` |
 | :--         | :--     | :--    |
+| `0.5`       | `0.19`  | `0.21` |
 | `0.4`       | `0.17`  | `0.19` |
 | `0.3`       | `0.17-dev*` | `0.18` |
 

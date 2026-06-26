@@ -1,5 +1,9 @@
 #![recursion_limit = "256"]
 
+#[cfg(target_arch = "wasm32")]
+use bevy::tasks::futures_lite::future;
+#[cfg(target_arch = "wasm32")]
+use bevy::tasks::AsyncComputeTaskPool;
 use bevy::{
     asset::RenderAssetUsages,
     color::palettes::css::GOLD,
@@ -9,10 +13,6 @@ use bevy::{
     render::render_resource::*,
     tasks::{block_on, Task},
 };
-#[cfg(target_arch = "wasm32")]
-use bevy::tasks::futures_lite::future;
-#[cfg(target_arch = "wasm32")]
-use bevy::tasks::AsyncComputeTaskPool;
 use bevy_burn::{BevyBurnBridgePlugin, BevyBurnHandle, BindingDirection, BurnDevice, TransferKind};
 use burn_core::tensor::{backend::Backend, ElementConversion, Int, Tensor};
 use burn_wgpu::{Wgpu, WgpuDevice as BurnWgpuDevice};
@@ -158,6 +158,7 @@ async fn navier_stokes<B: Backend>(
             .max()
             .into_scalar_async()
             .await
+            .expect("pressure residual readback failed")
             .elem::<f32>();
         if r_max <= tol {
             break;
@@ -461,6 +462,7 @@ async fn run_navier_stokes_job<B: Backend>(
         .max()
         .into_scalar_async()
         .await
+        .expect("velocity max readback failed")
         .elem::<f32>()
         .max(1e-3);
 
@@ -491,6 +493,7 @@ async fn run_navier_stokes_job<B: Backend>(
                 .max()
                 .into_scalar_async()
                 .await
+                .expect("velocity max readback failed")
                 .elem::<f32>()
                 .max(1e-3);
             safe_dt = (CFL / vmax).min(MAX_DT);
@@ -505,6 +508,7 @@ async fn run_navier_stokes_job<B: Backend>(
         .max()
         .into_scalar_async()
         .await
+        .expect("velocity magnitude readback failed")
         .elem::<f32>();
 
     let eps = 1e-3f32;
@@ -589,8 +593,8 @@ fn fps_display_setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         .spawn((
             Text("fps: ".to_string()),
             TextFont {
-                font: asset_server.load("fonts/Caveat-Bold.ttf"),
-                font_size: 60.0,
+                font: FontSource::Handle(asset_server.load("fonts/Caveat-Bold.ttf")),
+                font_size: FontSize::Px(60.0),
                 ..Default::default()
             },
             TextColor(Color::WHITE),
@@ -606,8 +610,8 @@ fn fps_display_setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             FpsText,
             TextColor(Color::Srgba(GOLD)),
             TextFont {
-                font: asset_server.load("fonts/Caveat-Bold.ttf"),
-                font_size: 60.0,
+                font: FontSource::Handle(asset_server.load("fonts/Caveat-Bold.ttf")),
+                font_size: FontSize::Px(60.0),
                 ..Default::default()
             },
             TextSpan::default(),

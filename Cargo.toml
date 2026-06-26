@@ -1,7 +1,7 @@
 [package]
 name = "bevy_burn"
 description = "bevy burn bindings"
-version = "0.4.10"
+version = "0.5.0"
 edition = "2021"
 authors = ["mosure <mitchell@mosure.me>"]
 license = "MIT"
@@ -20,6 +20,7 @@ homepage = "https://github.com/mosure/bevy_burn"
 repository = "https://github.com/mosure/bevy_burn"
 readme = "README.md"
 exclude = [
+  ".cargo",
   ".devcontainer",
   ".github",
   "docs",
@@ -86,8 +87,7 @@ wasm-bindgen = "0.2"
 
 
 [dependencies.bevy]
-git = "https://github.com/bevyengine/bevy"
-rev = "ae2fcc0353d95e887470f0f6fc8a7e434e5549ce"
+version = "0.19.0"
 default-features = false
 features = [
   "bevy_asset",
